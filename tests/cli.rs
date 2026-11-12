@@ -518,3 +518,141 @@ fn update_with_no_release_is_up_to_date_and_offline_failure_is_an_error() {
     assert_eq!(code, 1);
     assert_eq!(v["ok"], false);
 }
+
+fn fake_agents(sb: &Sandbox) {
+    std::fs::create_dir_all(sb.home.join(".claude")).unwrap();
+    std::fs::create_dir_all(sb.home.join(".codex")).unwrap();
+}
+
+#[test]
+fn agents_status_json() {
+    let sb = Sandbox::new();
+    fake_agents(&sb);
+    let (code, v) = sb.json(&["agents"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["command"], "agents");
+    let agents = v["data"]["agents"].as_array().unwrap();
+    let by = |id: &str| agents.iter().find(|a| a["id"] == id).unwrap();
+    assert_eq!(by("claude")["detected"], true);
+    assert_eq!(by("claude")["skill"]["status"], "missing");
+    assert_eq!(by("claude")["hooks"], "off");
+    assert_eq!(by("codex")["detected"], true);
+    assert!(by("codex").get("hooks").is_none());
+    assert!(
+        by("codex")["skill"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(".agents/skills/cmw/SKILL.md")
+    );
+    assert_eq!(by("grok")["detected"], false);
+    assert_eq!(by("t3")["detected"], false);
+    assert_eq!(by("t3")["worktree_setup"], "cmw hydrate");
+    assert!(by("t3").get("skill").is_none());
+    assert_eq!(v["data"]["prompt"], "cmw agents prompt --copy");
+    // Envelope order is ok, command, data, warnings.
+    let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["ok", "command", "data", "warnings"]);
+}
+
+#[test]
+fn agents_install_creates_then_unchanged() {
+    let sb = Sandbox::new();
+    fake_agents(&sb);
+    let (code, v) = sb.json(&["agents", "install"]);
+    assert_eq!(code, 0);
+    let skills = v["data"]["skills"].as_array().unwrap();
+    assert_eq!(skills.len(), 2);
+    assert!(skills.iter().all(|s| s["status"] == "created"));
+    assert!(v["data"]["claude_hooks"].is_null());
+    assert!(sb.home.join(".claude/skills/cmw/SKILL.md").exists());
+    assert!(sb.home.join(".agents/skills/cmw/SKILL.md").exists());
+    assert!(!sb.home.join(".grok").exists());
+    let (_, v) = sb.json(&["agents", "install"]);
+    assert!(
+        v["data"]["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["status"] == "unchanged")
+    );
+    let (_, v) = sb.json(&["agents"]);
+    assert_eq!(v["data"]["agents"][0]["skill"]["status"], "installed");
+}
+
+#[test]
+fn agents_install_refresh_and_hooks_flag() {
+    let sb = Sandbox::new();
+    fake_agents(&sb);
+    let (_, v) = sb.json(&["agents", "install", "--refresh"]);
+    assert_eq!(v["data"]["skills"].as_array().unwrap().len(), 0);
+    assert!(!sb.home.join(".claude/skills").exists());
+    let (_, v) = sb.json(&["agents", "install", "--agent", "grok", "--claude-hooks"]);
+    assert_eq!(v["data"]["skills"][0]["agent"], "grok");
+    assert_eq!(v["data"]["claude_hooks"]["status"], "added");
+    let v013 = include_str!("fixtures/SKILL-v0.1.3.md");
+    write(&sb.home.join(".grok/skills/cmw/SKILL.md"), v013);
+    let (_, v) = sb.json(&["agents", "install", "--refresh"]);
+    assert_eq!(v["data"]["skills"][0]["status"], "updated");
+    // An edited skill survives `--refresh` (which `cmw update` runs).
+    let edited = format!("{v013}\n## Mine\n");
+    write(&sb.home.join(".grok/skills/cmw/SKILL.md"), &edited);
+    let (_, v) = sb.json(&["agents", "install", "--refresh"]);
+    assert_eq!(v["data"]["skills"][0]["status"], "skipped");
+    assert_eq!(
+        std::fs::read_to_string(sb.home.join(".grok/skills/cmw/SKILL.md")).unwrap(),
+        edited
+    );
+}
+
+#[test]
+fn agents_prompt_matches_asset() {
+    let sb = Sandbox::new();
+    let (code, v) = sb.json(&["agents", "prompt"]);
+    assert_eq!(code, 0);
+    let asset = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/agent/prompt.md"
+    ))
+    .unwrap();
+    assert_eq!(v["data"]["text"], asset.as_str());
+}
+
+#[test]
+fn hook_claude_install_is_idempotent() {
+    let sb = Sandbox::new();
+    let (code, v) = sb.json(&["hook", "claude", "--install"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["status"], "added");
+    let settings = sb.home.join(".claude/settings.json");
+    assert_eq!(v["data"]["path"], s(&settings));
+    let (_, v) = sb.json(&["hook", "claude", "--install"]);
+    assert_eq!(v["data"]["status"], "unchanged");
+    let (_, v) = sb.json(&["agents"]);
+    assert_eq!(v["data"]["agents"][0]["hooks"], "on");
+}
+
+#[test]
+fn hook_claude_install_project_and_invalid_settings() {
+    let sb = Sandbox::new();
+    let (code, v) = sb.json(&["hook", "claude", "--install", "--project"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["path"], s(&sb.main.join(".claude/settings.json")));
+    write(&sb.home.join(".claude/settings.json"), "{oops");
+    let (code, v) = sb.json(&["hook", "claude", "--install"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["ok"], false);
+    assert!(v["error"]["hint"].is_string());
+    assert_eq!(
+        std::fs::read_to_string(sb.home.join(".claude/settings.json")).unwrap(),
+        "{oops"
+    );
+}
+
+#[test]
+fn skill_install_without_dir_installs_for_agents() {
+    let sb = Sandbox::new();
+    fake_agents(&sb);
+    let (code, v) = sb.json(&["skill", "install"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["skills"].as_array().unwrap().len(), 2);
+}

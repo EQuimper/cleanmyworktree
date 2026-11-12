@@ -1,4 +1,6 @@
+mod agents;
 mod cli;
+mod clipboard;
 mod clone;
 mod config;
 mod env;
@@ -17,7 +19,7 @@ mod tui;
 mod update;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
-use cli::{Cli, Command, EnvCommand, HookCommand, SkillCommand};
+use cli::{AgentsCommand, Cli, Command, EnvCommand, HookCommand, SkillCommand};
 use output::{CmwError, Ctx, Report, Result};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -108,6 +110,13 @@ fn command_name(c: &Command) -> &'static str {
         Command::Env { .. } => "env sync",
         Command::ShellInit(_) => "shell-init",
         Command::Update(_) => "update",
+        Command::Agents { command: None } => "agents",
+        Command::Agents {
+            command: Some(AgentsCommand::Install(_)),
+        } => "agents install",
+        Command::Agents {
+            command: Some(AgentsCommand::Prompt { .. }),
+        } => "agents prompt",
         Command::Skill {
             command: SkillCommand::Install { .. },
         } => "skill install",
@@ -115,7 +124,7 @@ fn command_name(c: &Command) -> &'static str {
             command: SkillCommand::Print { .. },
         } => "skill print",
         Command::Hook {
-            command: HookCommand::Claude,
+            command: HookCommand::Claude { .. },
         } => "hook claude",
         Command::Hook {
             command: HookCommand::ClaudeCreate,
@@ -223,15 +232,31 @@ fn run(json: bool, cwd_arg: Option<PathBuf>, mut command: Command) -> i32 {
         } => finish(&ctx, env::sync(&ctx, &cwd, a)),
         Command::ShellInit(a) => finish(&ctx, Ok(shell::init(a))),
         Command::Update(a) => finish(&ctx, update::run(&ctx, a)),
+        Command::Agents { command: None } => finish(&ctx, Ok(agents::status())),
+        Command::Agents {
+            command: Some(AgentsCommand::Install(a)),
+        } => finish(&ctx, agents::install(&ctx, a)),
+        Command::Agents {
+            command: Some(AgentsCommand::Prompt { copy }),
+        } => finish(&ctx, agents::prompt(*copy)),
         Command::Skill {
-            command: SkillCommand::Install { dir },
-        } => finish(&ctx, skill::install(&ctx, dir.as_deref())),
+            command: SkillCommand::Install { dir: Some(dir) },
+        } => finish(&ctx, skill::install(&ctx, dir)),
+        Command::Skill {
+            command: SkillCommand::Install { dir: None },
+        } => finish(
+            &ctx,
+            agents::install(&ctx, &cli::AgentsInstallArgs::default()),
+        ),
         Command::Skill {
             command: SkillCommand::Print { agents_md },
         } => finish(&ctx, Ok(skill::print(*agents_md))),
         Command::Hook {
-            command: HookCommand::Claude,
+            command: HookCommand::Claude { install: false, .. },
         } => finish(&ctx, Ok(skill::hook_claude())),
+        Command::Hook {
+            command: HookCommand::Claude { project, .. },
+        } => finish(&ctx, agents::install_hooks(&cwd, *project)),
         Command::Hook {
             command: HookCommand::ClaudeCreate,
         } => finish(&ctx, skill::hook_claude_create(&ctx, &cwd)),

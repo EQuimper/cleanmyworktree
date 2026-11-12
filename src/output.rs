@@ -2,6 +2,7 @@
 //!
 //! Human mode: result on stdout, warnings and errors on stderr.
 //! JSON mode (`--json` or `CMW_JSON=1`): exactly one JSON document on stdout:
+//!   (keys print in this order; serde_json's `preserve_order` is on)
 //!   success: {"ok":true,"command":"<name>","data":{...},"warnings":[...]}
 //!   failure: {"ok":false,"command":"<name>","error":{"kind":"refused","message":"...","hint":"cmw rm foo --force"},"warnings":[...]}
 //! Exit codes are stable (see `ErrorKind::exit_code`).

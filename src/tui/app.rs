@@ -124,6 +124,7 @@ pub enum Action {
     Clean { picked: Vec<Target> },
     Slim { idle: u64 },
     InstallShell { rc: PathBuf, line: String },
+    InstallClaudeHooks,
     Update,
 }
 
@@ -1152,21 +1153,29 @@ impl App {
                 },
             }
         };
-        let skill_status = match skill_file().and_then(|f| std::fs::read_to_string(f).ok()) {
-            Some(s) if s == skill::print(false).text => ("installed", Tone::Ok),
-            Some(_) => ("outdated", Tone::Warn),
-            None => ("not installed", Tone::Error),
-        };
+        let st = crate::agents::status();
+        let (skills, skills_tone) = skills_summary(&st);
+        let hooks = st.hooks();
         self.setup = vec![
             shell_row,
             SetupRow {
-                title: "Claude Code skill",
-                status: skill_status.0.into(),
-                tone: Some(skill_status.1),
+                title: "Agent skills",
+                status: skills,
+                tone: Some(skills_tone),
             },
             SetupRow {
                 title: "Claude Code hooks",
-                status: "copy settings".into(),
+                status: hooks.into(),
+                // Optional, so "off" is an action rather than a to-do.
+                tone: match hooks {
+                    "on" => Some(Tone::Ok),
+                    "partial" => Some(Tone::Warn),
+                    _ => None,
+                },
+            },
+            SetupRow {
+                title: "Agent setup prompt",
+                status: "copy".into(),
                 tone: None,
             },
             SetupRow {
@@ -1214,18 +1223,34 @@ impl App {
                     });
                 }
                 1 => {
-                    match skill::install(&Ctx::new(true, "skill install"), None) {
-                        Ok(r) => self.toast(
-                            format!("Skill {} at {}", r.status, tilde(Path::new(&r.path))),
-                            Tone::Ok,
-                        ),
+                    let args = crate::cli::AgentsInstallArgs::default();
+                    match crate::agents::install(&Ctx::new(true, "agents install"), &args) {
+                        Ok(r) => self.toast(r.summary(), Tone::Ok),
                         Err(e) => self.toast(e.message, Tone::Error),
                     }
                     self.refresh_setup();
                 }
-                2 => self.copy(
-                    &skill::hook_claude().text,
-                    "Hook settings copied. Paste them into .claude/settings.json",
+                2 => {
+                    if crate::agents::status().hooks() == "on" {
+                        self.toast("Claude Code hooks are on", Tone::Ok);
+                        return;
+                    }
+                    self.modal = Some(Modal::Confirm {
+                        title: "Route Claude Code worktrees through cmw?".into(),
+                        lines: vec![
+                            "Adds WorktreeCreate and WorktreeRemove hooks to ~/.claude/settings.json."
+                                .into(),
+                            String::new(),
+                            "claude --worktree then creates worktrees in ~/.cmw/worktrees and keeps any with unsaved work on removal."
+                                .into(),
+                        ],
+                        danger: false,
+                        action: Action::InstallClaudeHooks,
+                    });
+                }
+                3 => self.copy(
+                    crate::agents::PROMPT_MD,
+                    "Prompt copied. Paste it into Claude Code, Codex, Grok or T3 Code",
                 ),
                 _ => self.copy(&skill::print(true).text, "AGENTS.md snippet copied"),
             },
@@ -1234,7 +1259,7 @@ impl App {
     }
 
     fn copy(&mut self, text: &str, done: &str) {
-        if copy_to_clipboard(text) {
+        if crate::clipboard::copy(text) {
             self.toast(done, Tone::Ok);
         } else {
             self.toast("Could not reach the clipboard (pbcopy)", Tone::Error);
@@ -1338,6 +1363,20 @@ impl App {
                 self.start_busy(format!("Updating cmw to {to}"));
                 jobs::run_update(&self.tx);
             }
+            Action::InstallClaudeHooks => {
+                match crate::agents::install_hooks(&self.cwd, false) {
+                    Ok(r) => self.toast(
+                        format!(
+                            "Claude Code hooks {} in {}",
+                            r.status,
+                            tilde(Path::new(&r.path))
+                        ),
+                        Tone::Ok,
+                    ),
+                    Err(e) => self.toast(e.message, Tone::Error),
+                }
+                self.refresh_setup();
+            }
             Action::InstallShell { rc, line } => {
                 match append_line(&rc, &line) {
                     Ok(()) => self.toast(
@@ -1386,6 +1425,34 @@ pub fn idle_label(days: u64) -> String {
 }
 
 pub use crate::paths::tilde;
+
+/// Setup-screen status for the cmw skill across detected agents (all of them when none detected).
+fn skills_summary(st: &crate::agents::StatusReport) -> (String, Tone) {
+    let mut relevant: Vec<_> = st.detected_with_skill().collect();
+    if relevant.is_empty() {
+        relevant = st.agents.iter().filter(|a| a.skill.is_some()).collect();
+    }
+    let state = |a: &crate::agents::AgentStatus| a.skill.as_ref().map_or("missing", |s| s.status);
+    let names = |want: &str| {
+        relevant
+            .iter()
+            .filter(|a| state(a) == want)
+            .map(|a| a.name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if relevant.iter().all(|a| state(a) == "missing") {
+        ("not installed".into(), Tone::Error)
+    } else if !names("outdated").is_empty() {
+        ("outdated".into(), Tone::Warn)
+    } else if relevant.iter().any(|a| state(a) == "missing") {
+        (format!("missing for {}", names("missing")), Tone::Warn)
+    } else {
+        // Edited skills count as installed: `cmw update` leaves them alone on purpose.
+        let present: Vec<_> = relevant.iter().map(|a| a.name).collect();
+        (format!("installed ({})", present.join(", ")), Tone::Ok)
+    }
+}
 
 struct ShellInfo {
     name: &'static str,
@@ -1451,26 +1518,4 @@ fn append_line(rc: &Path, line: &str) -> std::io::Result<()> {
         f,
         "{sep}\n# cmw: `cmw cd <name>` and cd from the TUI\n{line}"
     )
-}
-
-fn skill_file() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/skills/cmw/SKILL.md"))
-}
-
-pub fn copy_to_clipboard(text: &str) -> bool {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    let Ok(mut child) = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return false;
-    };
-    let wrote = child
-        .stdin
-        .take()
-        .is_some_and(|mut s| s.write_all(text.as_bytes()).is_ok());
-    child.wait().is_ok_and(|s| s.success()) && wrote
 }

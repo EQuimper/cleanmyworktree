@@ -58,14 +58,19 @@ pub enum Command {
     },
     /// Print shell integration (adds `cmw cd <name>`). Use: eval "$(cmw shell-init zsh)"
     ShellInit(ShellInitArgs),
-    /// Agent instructions: install a Claude Code skill or print an AGENTS.md snippet.
+    /// Set up coding agents: skills for Claude Code, Codex and Grok, Claude Code hooks, and a setup prompt to paste.
+    Agents {
+        #[command(subcommand)]
+        command: Option<AgentsCommand>,
+    },
+    /// Install the cmw skill (same as `cmw agents install`) or print an AGENTS.md snippet.
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
     },
     /// Upgrade cmw to the latest release (Homebrew, installer or cargo). --check only reports.
     Update(UpdateArgs),
-    /// Print hook configuration that wires cmw into an agent tool.
+    /// Claude Code worktree hooks: print the snippet or merge it into settings.json (see also `cmw agents`).
     Hook {
         #[command(subcommand)]
         command: HookCommand,
@@ -212,7 +217,7 @@ pub enum Shell {
 
 #[derive(Subcommand, Debug)]
 pub enum SkillCommand {
-    /// Write the cmw skill to ~/.claude/skills/cmw/SKILL.md (or --dir).
+    /// Install the cmw skill for every detected agent, or only into --dir.
     Install {
         #[arg(long)]
         dir: Option<PathBuf>,
@@ -227,11 +232,50 @@ pub enum SkillCommand {
 #[derive(Subcommand, Debug)]
 pub enum HookCommand {
     /// Claude Code settings.json hooks that create/remove worktrees through cmw.
-    Claude,
+    Claude {
+        /// Merge the hooks into ~/.claude/settings.json instead of printing them.
+        #[arg(long)]
+        install: bool,
+        /// With --install: use <repo>/.claude/settings.json of the current repo.
+        #[arg(long, requires = "install")]
+        project: bool,
+    },
     /// Hook entry point: reads Claude Code's WorktreeCreate JSON on stdin, prints the worktree path.
     #[command(hide = true)]
     ClaudeCreate,
     /// Hook entry point: reads Claude Code's WorktreeRemove JSON on stdin.
     #[command(hide = true)]
     ClaudeRemove,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentsCommand {
+    /// Install the cmw skill for every detected agent (Claude Code, Codex, Grok).
+    Install(AgentsInstallArgs),
+    /// Print the setup prompt to paste into a coding agent.
+    Prompt {
+        /// Copy it to the clipboard (pbcopy) instead of printing it.
+        #[arg(long)]
+        copy: bool,
+    },
+}
+
+#[derive(Args, Debug, Default)]
+pub struct AgentsInstallArgs {
+    /// Install for exactly these agents, even if not detected. Repeatable.
+    #[arg(long = "agent", value_enum, value_name = "AGENT")]
+    pub agents: Vec<AgentId>,
+    /// Also merge the WorktreeCreate/WorktreeRemove hooks into ~/.claude/settings.json.
+    #[arg(long)]
+    pub claude_hooks: bool,
+    /// Only rewrite cmw skill files that already exist and differ; never create (used by `cmw update`).
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentId {
+    Claude,
+    Codex,
+    Grok,
 }

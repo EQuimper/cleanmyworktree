@@ -126,12 +126,13 @@ cmw rm fix/flaky-test --json    # refused with a hint if anything would be lost
 Teach your agent about cmw:
 
 ```sh
-cmw skill install              # Claude Code skill → ~/.claude/skills/cmw/SKILL.md
-cmw skill print --agents-md    # snippet for AGENTS.md / CLAUDE.md
-cmw hook claude                # settings.json hooks so Claude Code worktrees go through cmw
+cmw agents install             # cmw skill for Claude Code, Codex and Grok
+cmw agents prompt --copy       # setup prompt: paste it into Claude Code, Codex, Grok or T3 Code
+cmw agents                     # what's installed
+cmw hook claude --install      # optional: Claude Code's own worktrees go through cmw
 ```
 
-For T3 Code, set the project's worktree setup script to `cmw hydrate`.
+Pasted into T3 Code, the prompt also adds `cmw hydrate` as the worktree setup script of every T3 project.
 
 ## Disk usage, honestly
 

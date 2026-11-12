@@ -1,4 +1,5 @@
-//! `cmw skill install|print`, `cmw hook claude|claude-create|claude-remove`.
+//! Agent texts, `cmw skill install|print`, `cmw hook claude|claude-create|claude-remove`.
+//! Skill installation for every agent lives in `agents.rs`.
 //!
 //! Claude Code hook contract, verified 2026-11-12 against
 //! https://code.claude.com/docs/en/hooks (sections "WorktreeCreate" and "WorktreeRemove"):
@@ -39,54 +40,8 @@ impl Report for SkillInstallReport {
     }
 }
 
-const SKILL_MD: &str = r#"---
-name: cmw
-description: Use when creating, hydrating, listing, switching or cleaning git worktrees, or when cutting worktree disk usage; cmw makes worktrees fast, copy-on-write and safe to remove.
----
-
-# cmw: git worktrees for agents
-
-## When to use it
-
-Starting isolated work: run `cmw new <branch> --json`. Read `data.path` (the worktree), then check `data.hydrate.ready`. If it is false, run each `data.hydrate.needs_setup[].command` inside that path.
-
-## Commands
-
-- `cmw ls --json`: list worktrees.
-- `cmw path <name>`: print a worktree's path.
-- `cmw hydrate`: (re)hydrate the current worktree.
-- `cmw env sync`: sync .env files with the main worktree.
-- `cmw rm <name>`: remove a worktree (refuses unsafe removals).
-- `cmw gc`: dry run of cleanup; `cmw gc --yes` to apply.
-- `cmw clean-artifacts`: delete build artifacts to free disk.
-
-## JSON envelope
-
-Success: `{ok, command, data, warnings}`. Failure: `{ok: false, error: {kind, message, hint}}`.
-
-## Exit codes
-
-0 ok, 1 error, 2 usage, 3 refused (unsafe), 4 not found.
-
-## Rules
-
-- When refused (exit 3), run `error.hint` only if it is safe.
-- Never pass `--force` to `rm` unless the user explicitly asked to discard work.
-- Prefer `-C <dir>` over `cd`.
-- `CMW_JSON=1` makes every command emit JSON.
-
-## What hydrate does
-
-Clones dependencies copy-on-write, copies .env and secrets, skips build caches, and runs installs only when lockfiles differ from main.
-"#;
-
-const AGENTS_MD: &str = r#"## Worktrees (cmw)
-
-- Start isolated work with `cmw new <branch> --json`; use `data.path`, and run `data.hydrate.needs_setup[].command` if `data.hydrate.ready` is false.
-- Other commands: `cmw ls`, `cmw path <name>`, `cmw hydrate`, `cmw env sync`, `cmw rm <name>`, `cmw gc` (dry run) / `cmw gc --yes`.
-- Output: `{ok, command, data, warnings}` or `{ok: false, error: {kind, message, hint}}`. Exit codes: 0 ok, 1 error, 2 usage, 3 refused, 4 not found.
-- On refusal run the `hint` only if safe. Never use `rm --force` unless the user asked to discard work. Prefer `-C <dir>` over cd.
-"#;
+pub(crate) const SKILL_MD: &str = include_str!("../assets/agent/SKILL.md");
+pub(crate) const AGENTS_MD: &str = include_str!("../assets/agent/AGENTS.md");
 
 pub fn print(agents_md: bool) -> TextReport {
     TextReport {
@@ -94,21 +49,12 @@ pub fn print(agents_md: bool) -> TextReport {
     }
 }
 
-fn default_skill_dir() -> Result<PathBuf> {
-    let home =
-        std::env::var_os("HOME").ok_or_else(|| CmwError::error("$HOME is not set; pass --dir"))?;
-    Ok(PathBuf::from(home).join(".claude/skills/cmw"))
+/// `cmw skill install --dir <dir>`: write the skill into exactly one directory.
+pub fn install(_ctx: &Ctx, dir: &Path) -> Result<SkillInstallReport> {
+    install_to(dir)
 }
 
-pub fn install(_ctx: &Ctx, dir: Option<&Path>) -> Result<SkillInstallReport> {
-    let dir = match dir {
-        Some(d) => d.to_path_buf(),
-        None => default_skill_dir()?,
-    };
-    install_to(&dir)
-}
-
-fn install_to(dir: &Path) -> Result<SkillInstallReport> {
+pub(crate) fn install_to(dir: &Path) -> Result<SkillInstallReport> {
     let file = dir.join("SKILL.md");
     let status = match std::fs::read_to_string(&file) {
         Ok(existing) if existing == SKILL_MD => "unchanged",
@@ -243,6 +189,14 @@ mod tests {
         assert!(SKILL_MD.starts_with("---\nname: cmw\ndescription: "));
         assert!(print(true).text.starts_with("## Worktrees (cmw)"));
         assert_eq!(print(false).text, SKILL_MD);
+        let prompt = crate::agents::PROMPT_MD;
+        for cmd in [
+            "cmw agents install --json",
+            "cmw agents --json",
+            "cmw agents install --claude-hooks --json",
+        ] {
+            assert!(prompt.contains(cmd), "prompt.md lacks `{cmd}`");
+        }
     }
 
     #[test]

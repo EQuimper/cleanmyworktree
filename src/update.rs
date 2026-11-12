@@ -363,7 +363,23 @@ pub fn run(ctx: &Ctx, args: &UpdateArgs) -> Result<UpdateReport> {
         .with_hint(cmd));
     }
     report.updated = true;
+    refresh_agent_skills(ctx, &path);
     Ok(report)
+}
+
+/// Let the NEW binary rewrite any cmw skill files left by an older release. Never fails the update.
+fn refresh_agent_skills(ctx: &Ctx, installed: &Path) {
+    let ok = Command::new(installed)
+        .args(["agents", "install", "--refresh", "--json"])
+        .env_remove("CMW_JSON")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        ctx.warn("couldn't refresh agent skills; run: cmw agents install");
+    }
 }
 
 /// Run `script` through `sh` (stderr folded into stdout), sending each line to progress.

@@ -489,3 +489,19 @@ fn confirm_button_hits_match_the_drawn_footer_at_narrow_widths() {
         }
     }
 }
+
+#[test]
+fn setup_lists_agent_rows() {
+    let app = app();
+    let titles: Vec<_> = app.setup.iter().map(|r| r.title).collect();
+    assert_eq!(
+        titles,
+        [
+            "Shell integration",
+            "Agent skills",
+            "Claude Code hooks",
+            "Agent setup prompt",
+            "AGENTS.md snippet"
+        ]
+    );
+}

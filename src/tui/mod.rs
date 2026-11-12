@@ -106,7 +106,7 @@ fn hand_off_directory(dir: Option<PathBuf>) {
     }
     let cmd = format!("cd {}", crate::output::sh_quote(&dir.display().to_string()));
     println!("{}", dir.display());
-    if app::copy_to_clipboard(&cmd) {
+    if crate::clipboard::copy(&cmd) {
         eprintln!(
             "Copied `{cmd}` to the clipboard. Setup → Shell integration makes cmw cd for you."
         );
