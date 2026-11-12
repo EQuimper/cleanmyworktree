@@ -1,8 +1,34 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center">
+  <img src="assets/icon.svg" width="96" height="96" alt="cmw logo">
+</p>
 
-# CleanMyWorktree (`cmw`)
+<h1 align="center">CleanMyWorktree</h1>
 
-Fast, disk-cheap git worktrees for humans and AI agents.
+<p align="center">
+  <b>Git worktrees in seconds, not gigabytes.</b><br>
+  Copy-on-write dependencies, <code>.env</code> that follows, cleanup that never loses work. Built for humans and AI agents.
+</p>
+
+<p align="center">
+  <a href="https://cmw.equimper.com/docs/"><b>Documentation</b></a> ·
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="https://cmw.equimper.com/docs/agents/">Use with agents</a>
+</p>
+
+<p align="center">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-APFS-000?logo=apple&logoColor=white">
+  <img alt="Rust" src="https://img.shields.io/badge/built_with-Rust-000?logo=rust&logoColor=white">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4ef2a0">
+</p>
+
+---
+
+```console
+$ cmw new feat/login
+hydrated ~/.cmw/worktrees/shop/feat-login in 1.6s: 3 cloned, 2 copied, 4 skipped; installs: 1 up to date; ready
+~/.cmw/worktrees/shop/feat-login
+```
 
 - **Seconds to set up.** Dependencies are copy-on-write cloned from your main checkout. On APFS a 1.4 GB `node_modules` (107k files) clones in about 1.6 s.
 - **Near-zero extra disk.** Clones share blocks with the original until a file changes. `npm install new-lib` in a worktree only costs the new lib.
@@ -11,14 +37,14 @@ Fast, disk-cheap git worktrees for humans and AI agents.
 - **Safe cleanup.** Removes merged worktrees together with the DerivedData, `.cxx` and build caches they leave behind. It never deletes uncommitted or unpushed work unless you pass `--force`.
 - **Agent-friendly.** `--json` everywhere, no prompts, stable exit codes, and every refusal comes with the exact command that fixes it.
 
-macOS only for v0.1. Linux reflink support is planned.
-
 ## Install
 
 ```sh
 brew install equimper/tap/cmw
 eval "$(cmw shell-init zsh)"   # optional: adds `cmw cd <name>`; put it in ~/.zshrc
 ```
+
+macOS only for v0.1. Other options, including bash and fish, are in the [install guide](https://cmw.equimper.com/docs/install/).
 
 ## Quick start
 
@@ -55,6 +81,8 @@ After cloning, cmw compares each lockfile with main's:
 - **`pod install`:** runs only when `Podfile.lock` changed. `--no-slow` skips it and reports the worktree as `needs_setup`.
 - **Expo projects that generate `ios/` and `android/`** (instead of committing them): those folders are cloned, and cmw warns `stale_native` if the app config or `package.json` differs from main.
 
+Every pattern is listed in [Built-in rules](https://cmw.equimper.com/docs/rules/).
+
 ### `.cmw.toml` (optional, commit it)
 
 ```toml
@@ -66,7 +94,7 @@ strategy = "copy"                  # clone | copy | regen | skip
 post = ["npm run codegen"]         # run in the worktree after hydrate
 ```
 
-Your rules are checked before the built-in ones.
+Your rules are checked before the built-in ones. See [`.cmw.toml`](https://cmw.equimper.com/docs/config/).
 
 ## For agents
 
@@ -80,7 +108,7 @@ cmw is designed so an agent can drive it without supervision.
 | No prompts | Never reads stdin. `gc` and `clean-artifacts` are dry runs unless `--yes`. |
 | Idempotent | `cmw new <branch>` on an existing worktree returns its path. `hydrate` can be re-run safely. |
 | Parallel-safe | A lock per repo serializes concurrent cmw runs. |
-| Plain mode | `cmw new` and `cmw path` print only the path, so `cd "$(cmw new x)"` works. |
+| Plain mode | `cmw new` and `cmw path` print the path as the last line, so `cd "$(cmw new x)"` works. |
 | `-C <dir>` | Run against a repo without `cd`, like `git -C`. |
 
 A typical agent loop:
@@ -112,6 +140,16 @@ Copy-on-write clones fool `du`: each clone is reported at full size even though 
 - **Post hooks that edit inside dependency folders aren't detected.** If a `[hydrate] post` command replaces `node_modules` (or `Pods`, `vendor`, `.venv`), cmw notices and reports `needs_setup`. Patching individual files inside those folders goes unnoticed. If your hooks patch dependencies, re-run the package manager after them.
 - **Merge detection is conservative.** `git branch --merged` misses squash merges, so cmw falls back to patch-id comparison and the `gh` CLI. A branch counts as merged only when one of those checks proves it. A branch with no commits of its own is never treated as merged, and anything unproven is kept.
 - **`rm` and `gc` refuse worktrees with initialized submodules** unless you pass `--force`, because cmw can't yet check for unpushed commits inside submodules.
+
+## Documentation
+
+The full docs live at **[cmw.equimper.com](https://cmw.equimper.com/docs/)**. The site's source is in [`website/`](website/) (Astro + Starlight, deployed on Netlify):
+
+```sh
+cd website
+npm install
+npm run dev
+```
 
 ## License
 

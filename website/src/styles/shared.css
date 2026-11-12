@@ -1,0 +1,25 @@
+:root {
+  --mint: #4ef2a0;
+  --mint-deep: #0b7a46;
+  --ink: #000;
+  --graphite: #141615;
+  --graphite-line: #2c302e;
+  --paper: #fff;
+  --mist: #eef1ef;
+  --stone: #5a5f5c;
+  --font-sans: 'Archivo Variable', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-mono: 'Martian Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* A strategy label, as hydrate reports it. */
+.tag {
+  display: inline-block;
+  padding: 0 0.4em;
+  border-radius: 3px;
+  background: var(--mint);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  font-weight: 700;
+  line-height: 1.5;
+}
