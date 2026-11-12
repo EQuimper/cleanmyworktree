@@ -25,7 +25,7 @@ pub struct Rule {
     /// Glob matched against the entry's repo-relative path (no trailing slash), e.g. `**/node_modules`.
     pub pattern: String,
     pub strategy: Strategy,
-    /// Ecosystem label shown in reports: node, ios, android, expo, php, python, rust, ruby, flutter, env, build, user.
+    /// Ecosystem label shown in reports: node, ios, android, expo, php, python, rust, ruby, flutter, env, agent, build, user.
     pub ecosystem: String,
     /// Only match directories (true) or files (false); None matches both.
     pub dir: Option<bool>,
@@ -66,6 +66,23 @@ pub fn builtin() -> Vec<Rule> {
         // --- Expo / React Native continuous native generation: whole ios/ or android/ ignored.
         Rule::new("**/ios", Clone, "expo", D).native(),
         Rule::new("**/android", Clone, "expo", D).native(),
+        // --- Local agent config (Claude Code, Codex, Cursor, ...): follows every worktree so
+        // agents get the same skills/agents/settings. Claude Code's own worktrees are never cloned.
+        Rule::new("**/.claude/worktrees", Skip, "agent", D),
+        Rule::new("**/.claude", Clone, "agent", D),
+        Rule::new("**/.claude/**", Clone, "agent", D),
+        Rule::new("**/.claude/**", Copy, "agent", F),
+        Rule::new("**/.agents", Clone, "agent", D),
+        Rule::new("**/.agents/**", Clone, "agent", D),
+        Rule::new("**/.agents/**", Copy, "agent", F),
+        Rule::new("**/.codex/**", Copy, "agent", F),
+        Rule::new("**/.cursor/**", Copy, "agent", F),
+        Rule::new("**/.grok/**", Clone, "agent", D),
+        Rule::new("**/.grok/**", Copy, "agent", F),
+        Rule::new("**/.gemini/**", Copy, "agent", F),
+        Rule::new("**/.windsurf/**", Copy, "agent", F),
+        Rule::new("**/CLAUDE.local.md", Copy, "agent", F),
+        Rule::new("**/.mcp.json", Copy, "agent", F),
         // --- Dependencies (relocatable) -> clone
         Rule::new("**/node_modules", Clone, "node", D),
         Rule::new("**/.yarn/cache", Clone, "node", D),
@@ -80,6 +97,7 @@ pub fn builtin() -> Vec<Rule> {
         // --- Secrets and machine-local config -> independent copy
         Rule::new("**/.env", Copy, "env", F),
         Rule::new("**/.env.*", Copy, "env", F),
+        Rule::new("**/*.env", Copy, "env", F),
         Rule::new("**/.envrc", Copy, "env", F),
         Rule::new("**/.dev.vars", Copy, "env", F),
         Rule::new("**/.npmrc", Copy, "node", F),
@@ -226,6 +244,11 @@ mod tests {
         assert_eq!(s(&rs, "mobile/ios/"), Some(Strategy::Clone));
         assert!(rs.classify("mobile/ios/", false).unwrap().native_project);
         assert_eq!(s(&rs, "random-thing/"), None);
+        assert_eq!(s(&rs, ".claude/agents/planner.md"), Some(Strategy::Copy));
+        assert_eq!(s(&rs, ".agents/skills/harness/"), Some(Strategy::Clone));
+        assert_eq!(s(&rs, ".claude/worktrees/"), Some(Strategy::Skip));
+        assert_eq!(s(&rs, "CLAUDE.local.md"), Some(Strategy::Copy));
+        assert_eq!(s(&rs, "mobile/.argent/secrets.env"), Some(Strategy::Copy));
     }
 
     #[test]
