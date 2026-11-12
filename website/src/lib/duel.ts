@@ -56,6 +56,8 @@ export const sessions: {
       { run: 1000 },
       { out: 'up to date, audited 1413 packages in 1s' },
       { out: 'found 0 vulnerabilities' },
+      { prompt: `${wt} $`, cmd: 'ls .env*' },
+      { out: '.env.local' },
       { idle: `${wt} $` },
     ],
   },
