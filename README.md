@@ -1,5 +1,110 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# CleanMyWorktree
+# CleanMyWorktree (`cmw`)
 
-Created in [T3 Code](https://t3.codes).
+Fast, disk-cheap git worktrees for humans and AI agents.
+
+- **Seconds to set up.** Dependencies are copy-on-write cloned from your main checkout. On APFS a 1.4 GB `node_modules` (107k files) clones in about 1.6 s.
+- **Near-zero extra disk.** Clones share blocks with the original until a file changes. `npm install new-lib` in a worktree only costs the new lib.
+- **`.env` follows.** Ignored secrets and machine-local config are copied into every worktree, and `cmw env sync` refreshes them later.
+- **Works with most stacks.** Node (npm, pnpm, yarn, bun), iOS (CocoaPods, SPM), Android (Gradle), Expo / React Native, PHP (Composer), Python (uv, poetry), Rust.
+- **Safe cleanup.** Removes merged worktrees together with the DerivedData, `.cxx` and build caches they leave behind. It never deletes uncommitted or unpushed work unless you pass `--force`.
+- **Agent-friendly.** `--json` everywhere, no prompts, stable exit codes, and every refusal comes with the exact command that fixes it.
+
+macOS only for v0.1. Linux reflink support is planned.
+
+## Install
+
+```sh
+brew install equimper/tap/cmw
+eval "$(cmw shell-init zsh)"   # optional: adds `cmw cd <name>`; put it in ~/.zshrc
+```
+
+## Quick start
+
+```sh
+cmw new feat/login            # create + hydrate; prints the path
+cmw cd feat/login             # jump into it (needs shell-init)
+cmw ls                        # branch, dirty, merged, idle, hydrated
+cmw hydrate                   # fill a worktree made by T3, Claude Code or plain git
+cmw rm feat/login             # remove the worktree, its caches, and the branch if merged
+cmw gc                        # dry run: what is safe to remove
+cmw gc --yes                  # remove it and report the real space freed
+cmw clean-artifacts --yes     # strip DerivedData/.cxx/build/.next from idle worktrees
+```
+
+`cmw new` puts worktrees in `~/.cmw/worktrees/<repo>/<branch>`; set `$CMW_HOME` to change that. Every other command works on any git worktree, including the ones under `~/.t3/worktrees`. `ls --all`, `gc --all` and `clean-artifacts --all` scan `~/.cmw/worktrees`, `~/.t3/worktrees` and any folders listed in `$CMW_SCAN_ROOTS`.
+
+## What hydrate does
+
+cmw lists the gitignored files in the main checkout and handles each one according to whether it still works after moving to another path:
+
+| Strategy | Examples | Why |
+|---|---|---|
+| **clone** | `node_modules`, `Pods`, `vendor`, `Carthage`, `target`, `.turbo` | Can be moved safely. A copy-on-write clone is instant and free. |
+| **copy** | `.env*`, `local.properties`, `google-services.json`, `GoogleService-Info.plist`, `*.keystore`, `*.jks`, `.xcode.env.local` | Secrets and local config. Each worktree gets its own copy. |
+| **regen** | `.venv`, `.dart_tool` | Contains absolute paths: a cloned venv's `pip` would install into main's venv. |
+| **skip** | `DerivedData`, `.cxx`, `build/`, `.gradle/`, `.next`, `.expo` | Build outputs tied to the original path. |
+
+Dependency directories are symlinked nowhere. Symlinked `node_modules` break npm, Metro/watchman and Node's module resolution (you get two copies of React), and changes leak between checkouts.
+
+After cloning, cmw compares each lockfile with main's:
+
+- **Same lockfile:** no install runs.
+- **Different lockfile:** cmw runs the project's normal install. npm always gets `npm install`, never `npm ci`, because `npm ci` deletes the cloned `node_modules`.
+- **`pod install`:** runs only when `Podfile.lock` changed. `--no-slow` skips it and reports the worktree as `needs_setup`.
+- **Expo projects that generate `ios/` and `android/`** (instead of committing them): those folders are cloned, and cmw warns `stale_native` if the app config or `package.json` differs from main.
+
+### `.cmw.toml` (optional, commit it)
+
+```toml
+[[rule]]
+pattern = "ios/Secrets.xcconfig"   # glob vs repo-relative path
+strategy = "copy"                  # clone | copy | regen | skip
+
+[hydrate]
+post = ["npm run codegen"]         # run in the worktree after hydrate
+```
+
+Your rules are checked before the built-in ones.
+
+## For agents
+
+cmw is designed so an agent can drive it without supervision.
+
+| Contract | Behavior |
+|---|---|
+| Output | `--json` or `CMW_JSON=1` prints one JSON document: `{"ok":true,"command":"new","data":{...},"warnings":[]}` |
+| Errors | `{"ok":false,"error":{"kind":"refused","message":"2 uncommitted changes in …","hint":"cmw rm feat-x --force"}}` |
+| Exit codes | `0` ok · `1` error · `2` usage · `3` refused (unsafe) · `4` not found |
+| No prompts | Never reads stdin. `gc` and `clean-artifacts` are dry runs unless `--yes`. |
+| Idempotent | `cmw new <branch>` on an existing worktree returns its path. `hydrate` can be re-run safely. |
+| Parallel-safe | A lock per repo serializes concurrent cmw runs. |
+| Plain mode | `cmw new` and `cmw path` print only the path, so `cd "$(cmw new x)"` works. |
+| `-C <dir>` | Run against a repo without `cd`, like `git -C`. |
+
+A typical agent loop:
+
+```sh
+cmw new fix/flaky-test --json   # data.path, data.hydrate.ready, data.hydrate.needs_setup[].command
+# ... work in data.path ...
+cmw rm fix/flaky-test --json    # refused with a hint if anything would be lost
+```
+
+Teach your agent about cmw:
+
+```sh
+cmw skill install              # Claude Code skill → ~/.claude/skills/cmw/SKILL.md
+cmw skill print --agents-md    # snippet for AGENTS.md / CLAUDE.md
+cmw hook claude                # settings.json hooks so Claude Code worktrees go through cmw
+```
+
+For T3 Code, set the project's worktree setup script to `cmw hydrate`.
+
+## Disk usage, honestly
+
+Copy-on-write clones fool `du`: each clone is reported at full size even though the blocks are shared. That's why `cmw ls --sizes` shows *apparent* size. `gc --yes` and `clean-artifacts --yes` report `freed_bytes` from the change in free disk space, which is the only number that reflects reality on APFS.
+
+## License
+
+MIT
