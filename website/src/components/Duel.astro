@@ -10,7 +10,8 @@ import { sessions } from '../lib/duel';
           <div class="tty-bar">
             <span class="lights" aria-hidden="true"><i /><i /><i /></span>
             <span class="tty-title">{s.title}</span>
-            <span class="clock" data-clock>{s.id === 'cmw' ? 'ready in 1.6 s' : 'still installing'}</span>
+            <span class="ff" data-ff hidden>▶▶ 30×</span>
+            <span class="clock" data-clock>{s.finalClock}</span>
           </div>
           <div class="tty-screen" data-screen>
             {s.steps.map((step) =>
@@ -18,8 +19,6 @@ import { sessions } from '../lib/duel';
                 <span class="line"><span class="prompt">{step.prompt} </span><span class="cmd">{step.cmd}</span></span>
               ) : 'out' in step ? (
                 <span class="line out">{step.out}{step.ok && <span class="ok">{step.ok}</span>}</span>
-              ) : 'spin' in step ? (
-                <span class="line spin">⠋</span>
               ) : 'idle' in step ? (
                 <span class="line"><span class="prompt">{step.idle} </span><span class="cursor" /></span>
               ) : null,
@@ -31,7 +30,7 @@ import { sessions } from '../lib/duel';
     }
   </div>
   <figcaption>
-    <span>A 1.4 GB node_modules with 107k files, on APFS.</span>
+    <span>cmw measured on a 1.4 GB node_modules with 107k files, on APFS. The npm install time is an example; yours depends on your machine and network.</span>
     <button type="button" class="replay" data-replay>Replay</button>
   </figcaption>
 </figure>

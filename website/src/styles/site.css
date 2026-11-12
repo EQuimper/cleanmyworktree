@@ -366,6 +366,29 @@ h1 {
   font-weight: 700;
 }
 
+.ff {
+  flex: none;
+  margin-left: auto;
+  color: var(--mint);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.ff[hidden] {
+  display: none;
+}
+
+.ff:not([hidden]) + .clock {
+  margin-left: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ff:not([hidden]) {
+    animation: blink 0.8s steps(1) infinite;
+  }
+}
+
 .cmw .clock {
   transition:
     background-color 200ms var(--ease-out),
@@ -437,6 +460,10 @@ h1 {
 
 .cmw .tty-foot {
   color: var(--mint);
+}
+
+.duel figcaption span {
+  max-width: 62ch;
 }
 
 .duel figcaption {
