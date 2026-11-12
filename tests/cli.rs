@@ -302,3 +302,15 @@ fn shell_init_stays_raw_with_cmw_json() {
     assert!(text.contains("command cmw path"), "expected raw script, got: {text}");
     assert!(!text.trim_start().starts_with('{'));
 }
+
+#[test]
+fn rm_refuses_worktree_with_missing_git_file() {
+    let sb = Sandbox::new();
+    let wt = sb.new_wt("feat/broken", "brk", &[]);
+    write(&wt.join("precious"), "keep me\n");
+    std::fs::remove_file(wt.join(".git")).unwrap();
+    let out = sb.run(&["rm", "feat/broken"]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
+    assert!(wt.join("precious").exists());
+}
