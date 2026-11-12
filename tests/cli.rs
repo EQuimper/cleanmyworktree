@@ -292,3 +292,13 @@ fn concurrent_new() {
     let list = git(&sb.main, &["worktree", "list"]);
     assert!(list.contains(s(&a)) && list.contains(s(&b)), "{list}");
 }
+
+#[test]
+fn shell_init_stays_raw_with_cmw_json() {
+    let sb = common::Sandbox::new();
+    let out = sb.cmd().env("CMW_JSON", "1").args(["shell-init", "zsh"]).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("command cmw path"), "expected raw script, got: {text}");
+    assert!(!text.trim_start().starts_with('{'));
+}

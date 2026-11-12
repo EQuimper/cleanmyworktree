@@ -84,7 +84,13 @@ fn lock_repo(cwd: &Path) -> Result<lock::RepoLock> {
 }
 
 fn run(cli: Cli) -> i32 {
-    let ctx = Ctx::new(cli.json, command_name(&cli.command));
+    // Outputs consumed by other programs keep their raw format even when CMW_JSON=1 is exported:
+    // `eval "$(cmw shell-init zsh)"` needs a script, Claude Code's WorktreeCreate hook needs a bare path.
+    let raw_output = matches!(
+        &cli.command,
+        Command::ShellInit(_) | Command::Hook { command: HookCommand::ClaudeCreate | HookCommand::ClaudeRemove }
+    );
+    let ctx = Ctx::new(cli.json && !raw_output, command_name(&cli.command));
     let cwd: PathBuf = match &cli.cwd {
         Some(d) => match std::fs::canonicalize(d) {
             Ok(p) => p,
