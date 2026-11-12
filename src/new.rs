@@ -103,7 +103,7 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
     if !args.no_hydrate && !is_main {
         match hydrate::hydrate(ctx, &main.path, &path, false, args.install) {
             Ok(r) => {
-                ctx.progress(r.human());
+                ctx.progress(r.summary(false, ctx.progress_style()));
                 hydrate_report = Some(r);
             }
             // The worktree exists but isn't usable as documented (`data.hydrate.ready`), so fail

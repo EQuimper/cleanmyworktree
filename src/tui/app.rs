@@ -396,7 +396,7 @@ impl App {
             }
             Msg::Progress(line) => {
                 if let Some(b) = &mut self.busy {
-                    b.lines.push(line);
+                    b.lines.extend(line.lines().map(str::to_string));
                     if b.lines.len() > 200 {
                         b.lines.drain(..100);
                     }
@@ -1385,13 +1385,7 @@ pub fn idle_label(days: u64) -> String {
     }
 }
 
-pub fn tilde(p: &Path) -> String {
-    let home = crate::paths::home();
-    match p.strip_prefix(&home) {
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => p.display().to_string(),
-    }
-}
+pub use crate::paths::tilde;
 
 struct ShellInfo {
     name: &'static str,

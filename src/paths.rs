@@ -1,9 +1,18 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// `p` with a leading `$HOME/` shortened to `~/`, for display.
+pub fn tilde(p: &Path) -> String {
+    let home = home();
+    match p.strip_prefix(&home) {
+        Ok(rest) if home != Path::new("/") => format!("~/{}", rest.display()),
+        _ => p.display().to_string(),
+    }
 }
 
 /// `$CMW_HOME`, default `~/.cmw`.

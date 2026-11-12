@@ -2,6 +2,7 @@
 
 export type Step =
   | { cmd: string; prompt: string; startClock?: boolean }
+  /** `ok` is a highlighted lead-in rendered before `out`. */
   | { out: string; ok?: string }
   | { run: number }
   | { stopClock: true }
@@ -49,7 +50,9 @@ export const sessions: {
       { prompt: '~/code/shop $', cmd: 'cmw new feat/login', startClock: true },
       { run: 1600 },
       { stopClock: true },
-      { out: `hydrated ${wt} in 1.6s: 3 cloned, 2 copied, 4 skipped; installs: 1 up to date; `, ok: 'ready' },
+      { ok: 'ready', out: ' in 1.6s' },
+      { out: '  files     3 cloned, 2 copied, 4 skipped' },
+      { out: '  installs  1 up to date' },
       { out: wt },
       { prompt: '~/code/shop $', cmd: 'cmw cd feat/login' },
       { prompt: `${wt} $`, cmd: 'npm install' },

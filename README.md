@@ -26,7 +26,9 @@
 
 ```console
 $ cmw new feat/login
-hydrated ~/.cmw/worktrees/shop/feat-login in 1.6s: 3 cloned, 2 copied, 4 skipped; installs: 1 up to date; ready
+ready in 1.6s
+  files     3 cloned, 2 copied, 4 skipped
+  installs  1 up to date
 ~/.cmw/worktrees/shop/feat-login
 ```
 

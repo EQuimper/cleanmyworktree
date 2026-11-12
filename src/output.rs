@@ -9,6 +9,7 @@
 use serde::Serialize;
 use std::cell::RefCell;
 use std::fmt;
+use std::io::IsTerminal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -101,6 +102,51 @@ pub type Result<T> = std::result::Result<T, CmwError>;
 /// A command result. `human()` is what a person sees; the struct itself is the JSON `data`.
 pub trait Report: Serialize {
     fn human(&self) -> String;
+
+    /// `human()` with optional ANSI styling, used when printing to a color terminal.
+    fn human_styled(&self, _style: Style) -> String {
+        self.human()
+    }
+}
+
+/// ANSI styling for human output. Every method returns the text unchanged when disabled.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Style {
+    on: bool,
+}
+
+impl Style {
+    pub const PLAIN: Self = Self { on: false };
+
+    /// Color for a stream that is (or isn't) a terminal, honoring `NO_COLOR` and `TERM=dumb`.
+    pub fn for_terminal(is_terminal: bool) -> Self {
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        let dumb = std::env::var_os("TERM").is_some_and(|v| v == "dumb");
+        Self {
+            on: is_terminal && !no_color && !dumb,
+        }
+    }
+
+    fn paint(self, code: &str, text: &str) -> String {
+        if self.on {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    }
+
+    pub fn ok(self, text: &str) -> String {
+        self.paint("1;32", text)
+    }
+    pub fn bad(self, text: &str) -> String {
+        self.paint("1;31", text)
+    }
+    pub fn warn(self, text: &str) -> String {
+        self.paint("33", text)
+    }
+    pub fn dim(self, text: &str) -> String {
+        self.paint("2", text)
+    }
 }
 
 /// Receiver for progress lines; see `Ctx::with_sink`.
@@ -147,6 +193,15 @@ impl Ctx {
         self.warnings.borrow_mut().push(msg);
     }
 
+    /// Styling for lines sent through `progress`: plain unless they reach a color terminal.
+    pub fn progress_style(&self) -> Style {
+        if self.sink.is_some() || self.json {
+            Style::PLAIN
+        } else {
+            Style::for_terminal(std::io::stderr().is_terminal())
+        }
+    }
+
     /// Progress line for humans only (stderr). Silent in JSON mode.
     pub fn progress(&self, msg: impl AsRef<str>) {
         if let Some(sink) = &self.sink {
@@ -169,7 +224,7 @@ impl Ctx {
                 serde_json::to_string_pretty(&doc).expect("serializable report")
             );
         } else {
-            let text = report.human();
+            let text = report.human_styled(Style::for_terminal(std::io::stdout().is_terminal()));
             if !text.is_empty() {
                 println!("{}", text.trim_end());
             }

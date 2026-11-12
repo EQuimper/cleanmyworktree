@@ -88,8 +88,9 @@ async function play(tty: HTMLElement, signal: AbortSignal) {
       cursor.remove();
       if (step.startClock) clock.start();
     } else if ('out' in step) {
-      const line = el('span', 'line out', step.out);
+      const line = el('span', 'line out');
       if (step.ok) line.append(el('span', 'ok', step.ok));
+      line.append(step.out);
       screen.append(line);
       await sleep(70, signal);
     } else if ('run' in step) {

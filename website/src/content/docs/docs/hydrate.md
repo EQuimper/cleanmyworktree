@@ -79,7 +79,12 @@ Commands listed under `[hydrate] post` in `.cmw.toml` run in the worktree after 
 The human summary looks like this:
 
 ```
-hydrated ~/.cmw/worktrees/shop/feat-login in 1.6s: 3 cloned, 2 copied, 4 skipped; installs: 1 up to date; ready
+ready in 1.6s
+  path      ~/.cmw/worktrees/shop/feat-login
+  files     3 cloned, 2 copied, 4 skipped
+  installs  1 up to date
 ```
 
-`ready` means nothing is left to do. Otherwise check `needs_setup` and `stale_native` in the [JSON output](/docs/json/#hydrate). Each entry includes the command that finishes the job.
+`cmw new` leaves out the `path` row because it prints the path on the next line.
+
+`ready` means nothing is left to do. Otherwise the summary says `not ready` and lists what's left under `needs setup`, `stale native` or `failed`, each with the command that finishes the job. The same details are in the [JSON output](/docs/json/#hydrate) as `needs_setup`, `stale_native` and `installs`.

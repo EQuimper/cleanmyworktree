@@ -1,7 +1,7 @@
 //! Hydrate a worktree from the main checkout: clone deps, copy secrets, run installers.
 use crate::cli::{HydrateArgs, InstallFlags};
 use crate::clone::{self, CloneMethod};
-use crate::output::{CmwError, Ctx, Report, Result, sh_quote};
+use crate::output::{CmwError, Ctx, Report, Result, Style, sh_quote};
 use crate::paths::{self, STATE_FILE};
 use crate::rules::{self, Installer, NATIVE_STAMP_FILES, RuleSet, Strategy};
 use crate::{config, git};
@@ -69,56 +69,98 @@ pub struct NeedsSetup {
 
 impl Report for HydrateReport {
     fn human(&self) -> String {
-        let count = |f: &dyn Fn(&EntryReport) -> bool| self.entries.iter().filter(|e| f(e)).count();
-        let cloned = count(&|e| matches!(e.action, "cloned" | "would_clone"));
-        let copied = count(&|e| matches!(e.action, "copied" | "would_copy"));
-        let skipped = count(&|e| e.action.starts_with("skipped"));
+        self.summary(true, Style::PLAIN)
+    }
+
+    fn human_styled(&self, style: Style) -> String {
+        self.summary(true, style)
+    }
+}
+
+impl HydrateReport {
+    /// Status headline, then aligned detail rows. `show_path` adds the worktree path, which
+    /// `cmw new` leaves out because it prints the path on stdout right after.
+    pub fn summary(&self, show_path: bool, s: Style) -> String {
         let secs = self.duration_ms as f64 / 1000.0;
-        let verb = if self.dry_run {
-            "dry run, would hydrate"
+        let mut out = if self.dry_run {
+            "dry run, nothing changed".to_string()
+        } else if self.ready {
+            format!("{} in {secs:.1}s", s.ok("ready"))
         } else {
-            "hydrated"
+            format!("{} in {secs:.1}s", s.bad("not ready"))
         };
-        let mut line = format!(
-            "{verb} {} in {secs:.1}s: {cloned} cloned, {copied} copied, {skipped} skipped",
-            self.target.display()
-        );
-        if !self.installs.is_empty() {
-            let mut parts = Vec::new();
-            for (status, label) in [
-                ("up_to_date", "up to date"),
-                ("ran", "ran"),
-                ("would_run", "would run"),
-                ("failed", "failed"),
-                ("needs_setup", "needs setup"),
-            ] {
-                let n = self.installs.iter().filter(|i| i.status == status).count();
-                if n > 0 {
-                    parts.push(format!("{n} {label}"));
-                }
-            }
-            line.push_str(&format!("; installs: {}", parts.join(", ")));
+
+        type Paint = fn(Style, &str) -> String;
+        let mut rows: Vec<(&str, Paint, String)> = Vec::new();
+        if show_path {
+            rows.push(("path", Style::dim, paths::tilde(&self.target)));
         }
-        line.push_str(if self.ready { "; ready" } else { "; not ready" });
+        let entries =
+            |pred: &dyn Fn(&str) -> bool| self.entries.iter().filter(|e| pred(e.action)).count();
+        let (cloned, copied) = if self.dry_run {
+            ("to clone", "to copy")
+        } else {
+            ("cloned", "copied")
+        };
+        let files = join_counts(&[
+            (entries(&|a| matches!(a, "cloned" | "would_clone")), cloned),
+            (entries(&|a| matches!(a, "copied" | "would_copy")), copied),
+            (entries(&|a| a == "exists"), "already present"),
+            (entries(&|a| a.starts_with("skipped")), "skipped"),
+        ]);
+        if !files.is_empty() {
+            rows.push(("files", Style::dim, files));
+        }
+        let installs = |status: &str| self.installs.iter().filter(|i| i.status == status).count();
+        let installs = join_counts(&[
+            (installs("ran"), "ran"),
+            (installs("failed"), "failed"),
+            (installs("needs_setup"), "needs setup"),
+            (installs("would_run"), "to run"),
+            (installs("up_to_date"), "up to date"),
+        ]);
+        if !installs.is_empty() {
+            rows.push(("installs", Style::dim, installs));
+        }
         for n in &self.needs_setup {
-            if n.command.is_empty() {
-                line.push_str(&format!(
-                    "\n  needs setup: {} ({})",
-                    n.dir_or_root(),
-                    n.reason
-                ));
+            let value = if n.command.is_empty() {
+                format!("{} ({})", n.dir_or_root(), n.reason)
             } else {
-                line.push_str(&format!("\n  needs setup: {}", n.command));
-            }
+                n.command.clone()
+            };
+            rows.push(("needs setup", Style::warn, value));
         }
-        for s in &self.stale_native {
-            line.push_str(&format!("\n  stale native project: {}", s.hint));
+        for st in &self.stale_native {
+            rows.push(("stale native", Style::warn, st.hint.clone()));
         }
         for i in self.installs.iter().filter(|i| i.status == "failed") {
-            line.push_str(&format!("\n  install failed: {}", i.command));
+            rows.push(("failed", Style::bad, i.command.clone()));
         }
-        line
+
+        let width = rows.iter().map(|r| r.0.len()).max().unwrap_or(0);
+        let mut prev = "";
+        for (label, paint, value) in &rows {
+            // Repeated labels (several failures, several setup steps) are shown once.
+            let label_cell = if *label == prev {
+                " ".repeat(width)
+            } else {
+                paint(s, &format!("{label:<width$}"))
+            };
+            prev = label;
+            out.push_str(&format!("\n  {label_cell}  {value}"));
+        }
+        out
     }
+}
+
+/// `3 cloned, 2 copied`, leaving out zero counts.
+fn join_counts(counts: &[(usize, &str)]) -> String {
+    counts
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl NeedsSetup {
@@ -763,7 +805,10 @@ fn run_install(
         item.reason = Some(reason);
         return item;
     }
-    ctx.progress(format!("running: {}", item.command));
+    ctx.progress(
+        ctx.progress_style()
+            .dim(&format!("running {}", item.command)),
+    );
     let out = Command::new(inst.command[0])
         .args(&inst.command[1..])
         .current_dir(target.join(&p.dir))
@@ -933,7 +978,54 @@ mod tests {
         let r2 = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
         assert_eq!(action(&r2, "node_modules/"), "exists");
         assert_eq!(action(&r2, ".env"), "exists");
-        assert!(r2.human().starts_with("hydrated "));
+        assert!(r2.human().starts_with("ready in "));
+        let h = r2.human();
+        assert!(
+            h.ends_with("\n  files  2 already present, 1 skipped"),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn not_ready_summary_lists_what_is_left() {
+        let install = |command: &str, status| InstallItem {
+            lockfile: "package-lock.json".into(),
+            dir: String::new(),
+            ecosystem: "node".into(),
+            command: command.into(),
+            status,
+            reason: None,
+        };
+        let r = HydrateReport {
+            target: PathBuf::from("/wt"),
+            source: PathBuf::from("/main"),
+            dry_run: false,
+            ready: false,
+            duration_ms: 2700,
+            entries: Vec::new(),
+            pruned: Vec::new(),
+            unmatched: Vec::new(),
+            installs: vec![
+                install("npm install", "failed"),
+                install("bun install", "failed"),
+                install("pod install", "needs_setup"),
+            ],
+            stale_native: Vec::new(),
+            needs_setup: vec![NeedsSetup {
+                dir: "ios".into(),
+                ecosystem: "cocoapods".into(),
+                command: "(cd ios && pod install)".into(),
+                reason: "pod not found".into(),
+            }],
+        };
+        assert_eq!(
+            r.summary(false, Style::PLAIN),
+            "not ready in 2.7s\n\
+             \x20 installs     2 failed, 1 needs setup\n\
+             \x20 needs setup  (cd ios && pod install)\n\
+             \x20 failed       npm install\n\
+             \x20              bun install"
+        );
     }
 
     #[test]
@@ -972,7 +1064,9 @@ mod tests {
         assert_eq!(r.installs[0].lockfile, "package-lock.json");
         assert!(r.needs_setup.is_empty());
         assert!(r.ready);
-        assert!(r.human().contains("installs: 1 up to date; ready"));
+        assert!(r.human().starts_with("ready in "));
+        assert!(r.human().contains("\n  installs  1 up to date"));
+        assert!(!r.summary(false, Style::PLAIN).contains("path"));
     }
 
     #[test]
