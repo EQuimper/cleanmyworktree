@@ -58,3 +58,25 @@ fn hook_create_prints_bare_path_even_with_cmw_json() {
     let last = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
     assert!(last.starts_with('/') && std::path::Path::new(last).is_dir(), "last line must be a path: {stdout}");
 }
+
+/// Finding: with `-C other` and a relative target, the lock resolved against `other` while hydrate
+/// resolved against the process cwd, so the mutated repo was not locked.
+#[test]
+fn relative_target_with_dash_c_resolves_once() {
+    let start = Sandbox::new();
+    let other = Sandbox::new();
+    // `target` exists in both repos' parent dirs: start.root/target (worktree of start) and other.root/target.
+    let start_wt = start.new_wt("feat/s", "target", &["--no-hydrate"]);
+    let other_wt = other.new_wt("feat/o", "target", &["--no-hydrate"]);
+
+    // From start.root, `-C <other.root> hydrate target` must hydrate other.root/target (relative to -C), not start's.
+    let out = start
+        .cmd()
+        .current_dir(&start.root)
+        .args(["-C", other.root.to_str().unwrap(), "--json", "hydrate", "target", "--no-install"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(other_wt.join(".env").exists(), "-C relative target should be hydrated");
+    assert!(!start_wt.join(".env").exists(), "process-cwd target must not be touched");
+}

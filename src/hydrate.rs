@@ -124,7 +124,7 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &HydrateArgs) -> Result<HydrateReport> {
     let target = git::toplevel(args.path.as_deref().unwrap_or(cwd))?;
     let source = match &args.from {
         Some(p) => p.clone(),
-        None => git::main_worktree(cwd)?
+        None => git::main_worktree(&target)?
             .ok_or_else(|| CmwError::not_found("no main checkout found").with_hint("cmw hydrate --from <checkout>"))?
             .path,
     };

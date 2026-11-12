@@ -87,7 +87,7 @@ pub(crate) fn lock_repo(dir: &Path) -> Result<lock::RepoLock> {
     lock::acquire(&common, lock_timeout())
 }
 
-fn run(cli: Cli) -> i32 {
+fn run(mut cli: Cli) -> i32 {
     // Outputs consumed by other programs keep their raw format even when CMW_JSON=1 is exported:
     // `eval "$(cmw shell-init zsh)"` needs a script, Claude Code's WorktreeCreate hook needs a bare path.
     let raw_output = matches!(
@@ -106,6 +106,26 @@ fn run(cli: Cli) -> i32 {
         },
     };
 
+    // Resolve every path argument once against the effective directory (`-C` or cwd), so locking
+    // and execution always act on the same target. Modules then only ever see absolute paths.
+    let abs = |p: &mut Option<PathBuf>| {
+        if let Some(path) = p.as_mut()
+            && path.is_relative()
+        {
+            *path = cwd.join(&*path);
+        }
+    };
+    match &mut cli.command {
+        Command::New(a) => abs(&mut a.path),
+        Command::Hydrate(a) => {
+            abs(&mut a.path);
+            abs(&mut a.from);
+        }
+        Command::Env { command: EnvCommand::Sync(a) } => abs(&mut a.path),
+        Command::Skill { command: SkillCommand::Install { dir } } => abs(dir),
+        _ => {}
+    }
+
     let mutating = match &cli.command {
         Command::New(_) | Command::Rm(_) => true,
         Command::Hydrate(a) => !a.dry_run,
@@ -117,8 +137,8 @@ fn run(cli: Cli) -> i32 {
     };
     // Lock the repo that is actually mutated: an explicit target path may belong to another repo than cwd.
     let lock_target: PathBuf = match &cli.command {
-        Command::Hydrate(a) => a.path.as_ref().map(|p| cwd.join(p)).unwrap_or_else(|| cwd.clone()),
-        Command::Env { command: EnvCommand::Sync(a) } => a.path.as_ref().map(|p| cwd.join(p)).unwrap_or_else(|| cwd.clone()),
+        Command::Hydrate(a) => a.path.clone().unwrap_or_else(|| cwd.clone()),
+        Command::Env { command: EnvCommand::Sync(a) } => a.path.clone().unwrap_or_else(|| cwd.clone()),
         _ => cwd.clone(),
     };
     let _lock = if mutating {

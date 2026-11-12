@@ -31,7 +31,7 @@ impl Report for EnvSyncReport {
 
 pub fn sync(ctx: &Ctx, cwd: &Path, args: &EnvSyncArgs) -> Result<EnvSyncReport> {
     let target = git::toplevel(args.path.as_deref().unwrap_or(cwd))?;
-    let source = git::main_worktree(cwd)?
+    let source = git::main_worktree(&target)?
         .ok_or_else(|| CmwError::not_found("no main checkout"))?
         .path;
     if std::fs::canonicalize(&target)? == std::fs::canonicalize(&source)? {
