@@ -258,7 +258,7 @@ fn drop_admin_dir(ctx: &Ctx, admin: Option<PathBuf>, wt_path: &Path) -> &'static
         return "removed";
     }
     ctx.warn(format!(
-        "could not identify the git registration of {}; it stays registered and `git worktree prune` will clean it up",
+        "could not identify the git registration of {}; it stays registered (inspect with `git worktree list`)",
         wt_path.display()
     ));
     "deferred"
@@ -451,6 +451,8 @@ pub struct GcItem {
 pub struct PrunedItem {
     pub repo: String,
     pub path: PathBuf,
+    /// "pruned" | "would_prune" (dry run) | "failed".
+    pub outcome: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -508,7 +510,7 @@ impl Report for GcReport {
         }
         if !self.pruned.is_empty() {
             s.push(format!("{} {} worktree entr(ies) whose directory is missing:", if self.dry_run { "would prune" } else { "pruned" }, self.pruned.len()));
-            s.extend(self.pruned.iter().map(|p| format!("  {}", p.path.display())));
+            s.extend(self.pruned.iter().map(|p| format!("  {}  [{}]", p.path.display(), p.outcome)));
         }
         if !self.derived_data.is_empty() {
             s.push(format!("{} {} DerivedData folder(s):", if self.dry_run { "would delete" } else { "deleted" }, self.derived_data.len()));
@@ -643,7 +645,6 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
     let opts = StatusOpts { sizes: false, use_gh: env.use_gh };
     let mut gh = GhCache::default();
     let mut candidates: Vec<WorktreeStatus> = Vec::new();
-    let mut any_prunable = false;
 
     for wt in wts.iter().filter(|w| !w.is_main && !w.bare) {
         let skip = |reason: String| SkippedItem { repo: name.clone(), path: wt.path.clone(), branch: wt.branch.clone(), reason };
@@ -653,11 +654,22 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
             continue;
         }
         if wt.prunable {
-            if wt.locked {
-                report.skipped.push(skip("locked".into()));
-            } else {
-                any_prunable = true;
-                report.pruned.push(PrunedItem { repo: name.clone(), path: wt.path.clone() });
+            // Directory is gone: drop exactly this entry's admin dir, only once it is proven to be ours.
+            // Never a repo-wide `git worktree prune`, which would also destroy broken-link registrations.
+            match resolve_admin(&repo_dir, &wt.path) {
+                _ if wt.locked => report.skipped.push(skip("locked".into())),
+                None => report.skipped.push(skip("cannot prove which git registration belongs to this missing worktree; left untouched".into())),
+                Some(admin) => {
+                    let outcome = if !args.yes {
+                        "would_prune"
+                    } else if std::fs::remove_dir_all(&admin).is_ok() {
+                        "pruned"
+                    } else {
+                        ctx.warn(format!("could not remove {}", admin.display()));
+                        "failed"
+                    };
+                    report.pruned.push(PrunedItem { repo: name.clone(), path: wt.path.clone(), outcome: outcome.into() });
+                }
             }
             continue;
         }
@@ -710,10 +722,6 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
             }
         }
     }
-    if args.yes && any_prunable
-        && let Err(e) = git::run(&repo_dir, &["worktree", "prune"]) {
-            ctx.warn(format!("git worktree prune failed in {}: {}", repo_dir.display(), e.message));
-        }
 
     let registered: BTreeSet<PathBuf> = wts.iter().map(|w| canonical(&w.path)).collect();
     for o in find_orphans(&env.wt_root, &name, &registered) {
@@ -1051,6 +1059,38 @@ mod tests {
         assert!(r.removed.is_empty() && r.pruned.is_empty());
         assert_eq!(r.skipped.len(), 1);
         assert!(wt.join("precious").exists());
+        assert_eq!(git::list_worktrees(&repo).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn gc_prunes_only_missing_dirs_and_keeps_broken_registration() {
+        let (t, repo) = repo();
+        let broken = add_worktree(&repo, "broken");
+        break_link(&broken);
+        let gone = add_worktree(&repo, "gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+        let common = canonical(&git::common_dir(&repo).unwrap());
+        let admin_of = |n: &str| common.join("worktrees").join(n);
+        let r = gc_impl(&ctx(), &repo, &gc_args(true), &env(t.path())).unwrap();
+        assert_eq!(r.pruned.len(), 1);
+        assert_eq!(r.pruned[0].outcome, "pruned");
+        assert_eq!(r.skipped.len(), 1);
+        assert!(admin_of("broken").exists(), "broken admin dir was destroyed");
+        assert!(!admin_of("gone").exists());
+        assert!(broken.join("precious").exists() && !gone.exists());
+        let paths: Vec<_> = git::list_worktrees(&repo).unwrap().into_iter().map(|w| canonical(&w.path)).collect();
+        assert!(paths.contains(&canonical(&broken)));
+        assert!(!paths.contains(&canonical(&gone)));
+    }
+
+    #[test]
+    fn gc_dry_run_reports_prune_without_deleting() {
+        let (t, repo) = repo();
+        let gone = add_worktree(&repo, "gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+        let r = gc_impl(&ctx(), &repo, &gc_args(false), &env(t.path())).unwrap();
+        assert_eq!(r.pruned.len(), 1);
+        assert_eq!(r.pruned[0].outcome, "would_prune");
         assert_eq!(git::list_worktrees(&repo).unwrap().len(), 2);
     }
 
