@@ -34,7 +34,7 @@ pub struct EntryReport {
     pub path: String,
     pub strategy: Strategy,
     pub ecosystem: String,
-    /// cloned | copied | exists | regen | skipped | would_clone | would_copy
+    /// cloned | copied | exists | regen | skipped | skipped_symlink_parent | would_clone | would_copy
     pub action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<CloneMethod>,
@@ -72,7 +72,7 @@ impl Report for HydrateReport {
         let count = |f: &dyn Fn(&EntryReport) -> bool| self.entries.iter().filter(|e| f(e)).count();
         let cloned = count(&|e| matches!(e.action, "cloned" | "would_clone"));
         let copied = count(&|e| matches!(e.action, "copied" | "would_copy"));
-        let skipped = count(&|e| e.action == "skipped");
+        let skipped = count(&|e| e.action.starts_with("skipped"));
         let secs = self.duration_ms as f64 / 1000.0;
         let verb = if self.dry_run { "dry run, would hydrate" } else { "hydrated" };
         let mut line = format!(
@@ -149,6 +149,8 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
     let mut needs_setup = Vec::new();
 
     let mut state = read_state(target);
+    // Repo-relative paths populated from the source in this run.
+    let mut cloned_now: HashSet<String> = HashSet::new();
 
     let mut ignored = Vec::new();
     for entry in git::ignored_entries(source)? {
@@ -167,7 +169,13 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
         let mut method = None;
         let action = match rule.strategy {
             Strategy::Clone | Strategy::Copy => {
-                if std::fs::symlink_metadata(&dst).is_ok() {
+                if let Some(link) = symlink_ancestor(target, &dst) {
+                    ctx.warn(format!(
+                        "{rel}: skipped, {} is a symlink (writing through it would leave the worktree)",
+                        link.strip_prefix(target).unwrap_or(&link).display()
+                    ));
+                    "skipped_symlink_parent"
+                } else if std::fs::symlink_metadata(&dst).is_ok() {
                     "exists"
                 } else if dry_run {
                     if rule.strategy == Strategy::Clone { "would_clone" } else { "would_copy" }
@@ -180,6 +188,7 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
                     if rule.native_project {
                         prune_native(&rules, &dst, rel, &mut pruned);
                     }
+                    cloned_now.insert(rel.to_string());
                     "cloned"
                 } else {
                     if std::fs::symlink_metadata(&src).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -221,8 +230,11 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
 
     let mut installs = Vec::new();
     if !install.no_install {
+        let raw = &state.raw;
+        let persist = |recorded: &BTreeMap<String, String>| write_state(target, source, raw.clone(), recorded);
+        let env = InstallEnv { ctx, source, target, flags: install, dry_run, cloned_now: &cloned_now, persist: &persist };
         for p in &plan {
-            installs.push(run_install(ctx, source, target, p, install, dry_run, &mut state.installs));
+            installs.push(run_install(&env, p, &mut state.installs));
         }
         for item in &installs {
             match item.status {
@@ -283,16 +295,7 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
     ready = ready && needs_setup.is_empty() && stale_native.is_empty();
 
     if !dry_run {
-        let mut out = state.raw;
-        out.insert("version".into(), env!("CARGO_PKG_VERSION").into());
-        out.insert(
-            "hydrated_at_unix".into(),
-            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).into(),
-        );
-        out.insert("source".into(), serde_json::json!(source));
-        out.insert("installs".into(), serde_json::json!(state.installs));
-        let path = git::git_dir(target)?.join(STATE_FILE);
-        std::fs::write(&path, serde_json::to_string_pretty(&out).expect("serializable state"))?;
+        write_state(target, source, state.raw, &state.installs)?;
     }
 
     Ok(HydrateReport {
@@ -308,6 +311,24 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
         stale_native,
         needs_setup,
     })
+}
+
+fn write_state(
+    target: &Path,
+    source: &Path,
+    mut out: serde_json::Map<String, serde_json::Value>,
+    installs: &BTreeMap<String, String>,
+) -> Result<()> {
+    out.insert("version".into(), env!("CARGO_PKG_VERSION").into());
+    out.insert(
+        "hydrated_at_unix".into(),
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).into(),
+    );
+    out.insert("source".into(), serde_json::json!(source));
+    out.insert("installs".into(), serde_json::json!(installs));
+    let path = git::git_dir(target)?.join(STATE_FILE);
+    std::fs::write(&path, serde_json::to_string_pretty(&out).expect("serializable state"))?;
+    Ok(())
 }
 
 /// Previous `STATE_FILE` contents: unknown fields are preserved on rewrite.
@@ -355,6 +376,22 @@ fn expand_agent_dirs(rules: &RuleSet, source: &Path, entry: String, out: &mut Ve
         let child = format!("{entry}{name}{}", if is_dir { "/" } else { "" });
         expand_agent_dirs(rules, source, child, out);
     }
+}
+
+/// First existing ancestor of `dst` below `root` (exclusive of both) that is a symlink.
+fn symlink_ancestor(root: &Path, dst: &Path) -> Option<PathBuf> {
+    let rel = dst.strip_prefix(root).ok()?;
+    let mut cur = root.to_path_buf();
+    let comps: Vec<_> = rel.components().collect();
+    for c in &comps[..comps.len().saturating_sub(1)] {
+        cur.push(c);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => return Some(cur),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn parent_of(rel: &str) -> &str {
@@ -453,15 +490,20 @@ fn regen_fallback(ecosystem: &str, rel: &str) -> (String, &'static str) {
     }
 }
 
-fn run_install(
-    ctx: &Ctx,
-    source: &Path,
-    target: &Path,
-    p: &PlannedInstall,
+struct InstallEnv<'a> {
+    ctx: &'a Ctx,
+    source: &'a Path,
+    target: &'a Path,
     flags: InstallFlags,
     dry_run: bool,
-    recorded: &mut BTreeMap<String, String>,
-) -> InstallItem {
+    /// Repo-relative paths populated from the source in this run.
+    cloned_now: &'a HashSet<String>,
+    /// Persists the provenance map (used to make record removal durable before an install).
+    persist: &'a dyn Fn(&BTreeMap<String, String>) -> Result<()>,
+}
+
+fn run_install(env: &InstallEnv, p: &PlannedInstall, recorded: &mut BTreeMap<String, String>) -> InstallItem {
+    let InstallEnv { ctx, source, target, flags, dry_run, cloned_now, persist } = *env;
     let inst = p.installer;
     let lock_rel = p.lockfile_rel();
     let mut item = InstallItem {
@@ -475,16 +517,19 @@ fn run_install(
     let dep_ok = inst.dep_dir.is_none_or(|d| target.join(&p.dir).join(d).exists());
     let key = format!("{}|{}", p.dir, inst.lockfile);
     let current = hash_file(&target.join(&lock_rel));
+    // A dep dir populated from the source in this run mirrors the source, whatever an older
+    // record said: drop the record and trust only lockfile equality with the source.
+    let from_source = inst.dep_dir.is_some_and(|d| cloned_now.contains(&join_rel(&p.dir, d)));
+    if from_source {
+        recorded.remove(&key);
+    }
     let up_to_date = dep_ok
-        && match (recorded.get(&key), &current) {
-            // (a) provenance known: the deps were last made consistent with exactly this lockfile.
-            (Some(rec), Some(cur)) => rec == cur,
-            (Some(_), None) => false,
-            // No record. (b) dep dir freshly cloned from main in this run: it mirrors main, so
-            // compare lockfiles. (c) dep dir pre-existed (hydrated by something else): same rule,
-            // an assumption that it was built from main's lockfile.
-            (None, Some(cur)) => hash_file(&source.join(&lock_rel)).is_some_and(|h| &h == cur),
-            (None, None) => false,
+        && if from_source {
+            matches!((hash_file(&source.join(&lock_rel)), &current), (Some(s), Some(c)) if &s == c)
+        } else {
+            // Without a record the provenance of a pre-existing dep dir is unknown (it may have
+            // been built from any lockfile), so an install is required.
+            matches!((recorded.get(&key), &current), (Some(rec), Some(cur)) if rec == cur)
         };
     if up_to_date {
         if !dry_run {
@@ -507,6 +552,12 @@ fn run_install(
     if dry_run {
         item.status = "would_run";
         return item;
+    }
+    // Drop the record durably before the installer can touch the deps: a crash or failure must
+    // leave no claim that they match any lockfile.
+    recorded.remove(&key);
+    if let Err(e) = persist(recorded) {
+        ctx.warn(format!("could not update hydrate state: {e}"));
     }
     ctx.progress(format!("running: {}", item.command));
     let out = Command::new(inst.command[0])
@@ -769,16 +820,115 @@ mod tests {
         fs::create_dir_all(wt.join("node_modules")).unwrap();
         let p = PlannedInstall { installer: fake_installer(), dir: String::new() };
         let mut rec = BTreeMap::new();
-        let go = |rec: &mut BTreeMap<String, String>| {
-            run_install(&ctx(), &main, &wt, &p, InstallFlags::default(), false, rec).status
+        let cloned: HashSet<String> = ["node_modules".to_string()].into();
+        let go = |rec: &mut BTreeMap<String, String>, cloned: &HashSet<String>| {
+            run_install(&env(&main, &wt, cloned, &noop), &p, rec).status
         };
-        assert_eq!(go(&mut rec), "up_to_date");
+        let none = HashSet::new();
+        assert_eq!(go(&mut rec, &cloned), "up_to_date");
         fs::write(wt.join("package-lock.json"), "B").unwrap();
-        assert_eq!(go(&mut rec), "ran");
-        assert_eq!(go(&mut rec), "up_to_date"); // deps now match B
+        assert_eq!(go(&mut rec, &none), "ran");
+        assert_eq!(go(&mut rec, &none), "up_to_date"); // deps now match B
         fs::write(wt.join("package-lock.json"), "A").unwrap(); // equals main again, deps are from B
-        assert_eq!(go(&mut rec), "ran");
-        assert_eq!(go(&mut rec), "up_to_date");
+        assert_eq!(go(&mut rec, &none), "ran");
+        assert_eq!(go(&mut rec, &none), "up_to_date");
+    }
+
+    fn lock_fixture(lock: &str) -> (TempDir, PathBuf, PathBuf, PlannedInstall) {
+        let (tmp, main) = repo(&[("package-lock.json", lock)]);
+        let wt = add_wt(&main, &tmp, "wt");
+        (tmp, main, wt, PlannedInstall { installer: fake_installer(), dir: String::new() })
+    }
+
+    fn scripted(script: &'static str) -> &'static Installer {
+        Box::leak(Box::new(Installer {
+            ecosystem: "node",
+            lockfile: "package-lock.json",
+            command: Box::leak(Box::new(["sh", "-c", script])),
+            dep_dir: Some("node_modules"),
+            slow: false,
+        }))
+    }
+
+    fn env<'a>(
+        main: &'a Path,
+        wt: &'a Path,
+        cloned: &'a HashSet<String>,
+        persist: &'a dyn Fn(&BTreeMap<String, String>) -> Result<()>,
+    ) -> InstallEnv<'a> {
+        let ctx: &'static Ctx = Box::leak(Box::new(ctx()));
+        InstallEnv { ctx, source: main, target: wt, flags: InstallFlags::default(), dry_run: false, cloned_now: cloned, persist }
+    }
+
+    fn noop(_: &BTreeMap<String, String>) -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn recloned_deps_drop_stale_provenance() {
+        let (_tmp, main, wt, p) = lock_fixture("A");
+        fs::create_dir_all(main.join("node_modules")).unwrap();
+        fs::write(main.join("node_modules/v"), "A").unwrap();
+        // Worktree lock moved to B and "B" was installed and recorded, then deps were deleted.
+        fs::write(wt.join("package-lock.json"), "B").unwrap();
+        let mut rec = BTreeMap::new();
+        rec.insert("|package-lock.json".to_string(), hash_file(&wt.join("package-lock.json")).unwrap());
+        // node_modules re-cloned from main (A) in this run.
+        clone::clone_tree(&main.join("node_modules"), &wt.join("node_modules")).unwrap();
+        let cloned: HashSet<String> = ["node_modules".to_string()].into();
+        let r = run_install(&env(&main, &wt, &cloned, &noop), &p, &mut rec);
+        assert_eq!(r.status, "ran", "lock B vs deps A must not be up to date");
+    }
+
+    #[test]
+    fn failed_install_leaves_no_record_and_persists_removal_first() {
+        let (_tmp, main, wt, _) = lock_fixture("A");
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
+        let p = PlannedInstall { installer: scripted("exit 1"), dir: String::new() };
+        let mut rec = BTreeMap::new();
+        rec.insert("|package-lock.json".to_string(), hash_file(&wt.join("package-lock.json")).unwrap()); // record A
+        fs::write(wt.join("package-lock.json"), "C").unwrap();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let persist = |r: &BTreeMap<String, String>| {
+            seen.borrow_mut().push(r.len());
+            Ok(())
+        };
+        let cloned = HashSet::new();
+        let r = run_install(&env(&main, &wt, &cloned, &persist), &p, &mut rec);
+        assert_eq!(r.status, "failed");
+        assert!(rec.is_empty());
+        assert_eq!(*seen.borrow(), vec![0], "record removal persisted before the installer ran");
+        // Lock restored to the previously recorded A: the old record must not resurface.
+        fs::write(wt.join("package-lock.json"), "A").unwrap();
+        let r = run_install(&env(&main, &wt, &cloned, &noop), &p, &mut rec);
+        assert_eq!(r.status, "failed");
+    }
+
+    #[test]
+    fn unknown_provenance_requires_install() {
+        let (_tmp, main, wt, p) = lock_fixture("A");
+        fs::create_dir_all(wt.join("node_modules")).unwrap(); // pre-existing, lock equals main
+        let mut rec = BTreeMap::new();
+        let cloned = HashSet::new();
+        let r = run_install(&env(&main, &wt, &cloned, &noop), &p, &mut rec);
+        assert_eq!(r.status, "ran");
+    }
+
+    #[test]
+    fn expansion_does_not_write_through_symlinked_parent() {
+        let (tmp, main) = repo(&[]);
+        fs::write(main.join(".gitignore"), ".claude/\n").unwrap();
+        fs::create_dir_all(main.join(".claude")).unwrap();
+        fs::write(main.join(".claude/settings.local.json"), "{}").unwrap();
+        let wt = add_wt(&main, &tmp, "wt");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, wt.join(".claude")).unwrap();
+        let flags = InstallFlags { no_install: true, no_slow: false };
+        let r = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0, "nothing written outside the worktree");
+        assert_eq!(action(&r, ".claude/settings.local.json"), "skipped_symlink_parent");
     }
 
     #[test]
