@@ -103,11 +103,16 @@ pub trait Report: Serialize {
     fn human(&self) -> String;
 }
 
+/// Receiver for progress lines; see `Ctx::with_sink`.
+type Sink = Box<dyn Fn(&str)>;
+
 /// Per-invocation context. Warnings are buffered so JSON mode can put them in the envelope.
 pub struct Ctx {
     pub json: bool,
     pub command: &'static str,
     warnings: RefCell<Vec<String>>,
+    /// Receives progress and warning lines instead of stderr (the TUI streams them on screen).
+    sink: Option<Sink>,
 }
 
 impl Ctx {
@@ -116,13 +121,27 @@ impl Ctx {
             json,
             command,
             warnings: RefCell::new(Vec::new()),
+            sink: None,
         }
+    }
+
+    /// Route progress and warnings to `sink` instead of stderr.
+    pub fn with_sink(mut self, sink: impl Fn(&str) + 'static) -> Self {
+        self.sink = Some(Box::new(sink));
+        self
+    }
+
+    /// Warnings collected so far.
+    pub fn warnings(&self) -> Vec<String> {
+        self.warnings.borrow().clone()
     }
 
     /// Non-fatal problem. Printed to stderr immediately in human mode, collected in JSON mode.
     pub fn warn(&self, msg: impl Into<String>) {
         let msg = msg.into();
-        if !self.json {
+        if let Some(sink) = &self.sink {
+            sink(&format!("warning: {msg}"));
+        } else if !self.json {
             eprintln!("warning: {msg}");
         }
         self.warnings.borrow_mut().push(msg);
@@ -130,7 +149,9 @@ impl Ctx {
 
     /// Progress line for humans only (stderr). Silent in JSON mode.
     pub fn progress(&self, msg: impl AsRef<str>) {
-        if !self.json {
+        if let Some(sink) = &self.sink {
+            sink(msg.as_ref());
+        } else if !self.json {
             eprintln!("{}", msg.as_ref());
         }
     }

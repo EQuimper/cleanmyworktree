@@ -405,3 +405,23 @@ fn rm_refuses_worktree_with_missing_git_file() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
     assert!(wt.join("precious").exists());
 }
+
+#[test]
+fn bare_cmw_without_a_terminal_prints_help_and_exits_2() {
+    // Agents and pipes never get the TUI: the pre-TUI contract (help on stderr, exit 2) holds.
+    let sb = Sandbox::new();
+    let out = sb.run(&[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Usage: cmw"), "{err}");
+}
+
+#[test]
+fn bare_cmw_json_is_a_usage_error() {
+    let sb = Sandbox::new();
+    let (code, v) = sb.json(&[]);
+    assert_eq!(code, 2);
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"]["kind"], "usage");
+}

@@ -12,6 +12,24 @@ description: Every cmw command and flag.
 | `--version` | Print the version. |
 | `--help` | Print help for cmw or any subcommand. |
 
+## `cmw`
+
+With no arguments in a terminal, cmw opens an interactive screen: browse worktrees with their state and size, open one, create, hydrate, sync env, remove, clean up merged worktrees, slim build caches, and set up shell integration and the agent skill.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `j` `k` | Move |
+| `Enter` | Open the selected item. On a worktree, `cd` into it (needs [shell integration](/docs/install/#add-cmw-cd); otherwise the path is printed and copied). |
+| `1`–`5` | Jump to a screen from the home menu |
+| `A` | Switch between this repo and all repos |
+| `/` | Filter worktrees |
+| `H` `E` `D` | Hydrate, sync env, remove the selected worktree |
+| `Esc` / `Q` | Back / quit |
+
+Removing asks first. If cmw refuses because of uncommitted or unpushed work, you can type the branch name to force it.
+
+Without a terminal on stdin and stdout, or with `--json` / `CMW_JSON=1`, bare `cmw` prints help and exits 2, so scripts and agents are unaffected.
+
 ## `cmw new <branch>`
 
 Create a worktree for `<branch>` and hydrate it. Prints the path as the last line. [Guide](/docs/worktrees/)
@@ -94,7 +112,7 @@ Re-copy secrets and config from the main checkout. Files changed in the worktree
 
 ## `cmw shell-init <shell>`
 
-Print the shell function that adds `cmw cd`. `<shell>` is `zsh`, `bash` or `fish`.
+Print the shell function that adds `cmw cd`, and lets **Open** in the interactive screen change your directory. `<shell>` is `zsh`, `bash` or `fish`.
 
 ## `cmw skill install`
 
@@ -115,3 +133,5 @@ Print Claude Code `settings.json` hooks that create and remove worktrees through
 | `CMW_JSON` | `1` turns on `--json` for every command. |
 | `CMW_HOME` | cmw's folder. Default `~/.cmw`. Worktrees go to `$CMW_HOME/worktrees`. |
 | `CMW_SCAN_ROOTS` | Extra folders for `--all`, separated by `:`. |
+| `CMW_THEME` | `light` or `dark` for the interactive screen. Default: detected from the terminal. |
+| `NO_COLOR` | Any value turns off colors in the interactive screen. |

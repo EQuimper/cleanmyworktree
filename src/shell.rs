@@ -1,4 +1,6 @@
-//! `cmw shell-init <shell>`: prints a wrapper so `cmw cd <name>` changes the caller's directory.
+//! `cmw shell-init <shell>`: prints a wrapper so `cmw cd <name>` changes the caller's directory,
+//! and so does picking "Open" in the TUI (bare `cmw`): the TUI writes the chosen path to
+//! `$CMW_CD_FILE` and the wrapper `cd`s there after it exits.
 use crate::cli::{Shell, ShellInitArgs};
 use crate::output::Report;
 use serde::Serialize;
@@ -16,7 +18,16 @@ impl Report for ShellInitReport {
 }
 
 const POSIX: &str = r#"cmw() {
-  if [ "$1" = "cd" ]; then
+  if [ "$#" -eq 0 ]; then
+    local f p rc
+    f="$(mktemp -t cmw-cd.XXXXXX)" || return $?
+    CMW_CD_FILE="$f" command cmw
+    rc=$?
+    p="$(cat -- "$f")"
+    rm -f -- "$f"
+    if [ -n "$p" ]; then builtin cd -- "$p" || return $?; fi
+    return $rc
+  elif [ "$1" = "cd" ]; then
     shift
     local p
     p="$(command cmw path "$@")" || return $?
@@ -27,7 +38,17 @@ const POSIX: &str = r#"cmw() {
 }"#;
 
 const FISH: &str = r#"function cmw
-    if test "$argv[1]" = "cd"
+    if test (count $argv) -eq 0
+        set -l f (mktemp -t cmw-cd.XXXXXX); or return $status
+        CMW_CD_FILE=$f command cmw
+        set -l rc $status
+        set -l p (cat -- $f)
+        rm -f -- $f
+        if test -n "$p"
+            builtin cd -- "$p"; or return $status
+        end
+        return $rc
+    else if test "$argv[1]" = "cd"
         set -l p (command cmw path $argv[2..-1])
         or return $status
         builtin cd -- "$p"
@@ -59,6 +80,7 @@ mod tests {
             assert!(!r.script.is_empty());
             assert!(r.script.contains("command cmw path"), "{}", r.shell);
             assert!(r.script.contains("command cmw"));
+            assert!(r.script.contains("CMW_CD_FILE"), "{}", r.shell);
             assert_eq!(r.human(), r.script);
         }
     }

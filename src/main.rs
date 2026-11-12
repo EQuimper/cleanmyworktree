@@ -13,8 +13,9 @@ mod paths;
 mod rules;
 mod shell;
 mod skill;
+mod tui;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use cli::{Cli, Command, EnvCommand, HookCommand, SkillCommand};
 use output::{CmwError, Ctx, Report, Result};
 use std::path::{Path, PathBuf};
@@ -30,31 +31,61 @@ fn lock_timeout() -> Duration {
 }
 
 fn main() {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(e) => {
-            use clap::error::ErrorKind as K;
-            if matches!(
-                e.kind(),
-                K::DisplayHelp | K::DisplayVersion | K::DisplayHelpOnMissingArgumentOrSubcommand
-            ) {
-                e.exit();
+    let cli = Cli::try_parse().unwrap_or_else(|e| exit_on_parse_error(e));
+    let Cli { json, cwd, command } = cli;
+    let code = match command {
+        Some(command) => run(json, cwd, command),
+        None if tui::should_launch(json) => match resolve_cwd(cwd.as_deref()) {
+            Ok(dir) => tui::run(dir),
+            Err(e) => Ctx::new(false, "cmw").emit_error(&e),
+        },
+        // Not a terminal (agents, pipes, CI) or JSON requested: keep the pre-TUI contract and
+        // fail exactly like a missing subcommand did (help on stderr, exit 2).
+        None => {
+            let parsed = Cli::command()
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .try_get_matches()
+                .and_then(|m| Cli::from_arg_matches(&m));
+            match parsed {
+                Err(e) => exit_on_parse_error(e),
+                Ok(_) => unreachable!("a subcommand is required here"),
             }
-            if json_requested() {
-                let ctx = Ctx::new(true, "cmw");
-                let msg = e.render().to_string();
-                let first = msg
-                    .lines()
-                    .next()
-                    .unwrap_or("invalid arguments")
-                    .trim_start_matches("error: ")
-                    .to_string();
-                std::process::exit(ctx.emit_error(&CmwError::usage(first).with_hint("cmw --help")));
-            }
-            e.exit(); // clap exits 2 for usage errors, matching our contract.
         }
     };
-    std::process::exit(run(cli));
+    std::process::exit(code);
+}
+
+fn exit_on_parse_error(e: clap::Error) -> ! {
+    use clap::error::ErrorKind as K;
+    if matches!(
+        e.kind(),
+        K::DisplayHelp | K::DisplayVersion | K::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        e.exit();
+    }
+    if json_requested() {
+        let ctx = Ctx::new(true, "cmw");
+        let msg = e.render().to_string();
+        let first = msg
+            .lines()
+            .next()
+            .unwrap_or("invalid arguments")
+            .trim_start_matches("error: ")
+            .to_string();
+        std::process::exit(ctx.emit_error(&CmwError::usage(first).with_hint("cmw --help")));
+    }
+    e.exit(); // clap exits 2 for usage errors, matching our contract.
+}
+
+/// The effective directory: `-C <dir>` (canonicalized) or the process cwd.
+fn resolve_cwd(dir: Option<&Path>) -> Result<PathBuf> {
+    match dir {
+        Some(d) => std::fs::canonicalize(d)
+            .map_err(|e| CmwError::not_found(format!("-C {}: {e}", d.display()))),
+        None => std::env::current_dir()
+            .map_err(|e| CmwError::error(format!("cannot read current directory: {e}"))),
+    }
 }
 
 /// Detect --json / CMW_JSON before clap succeeds, so even usage errors are JSON for agents.
@@ -109,32 +140,20 @@ pub(crate) fn lock_repo(dir: &Path) -> Result<lock::RepoLock> {
     lock::acquire(&common, lock_timeout())
 }
 
-fn run(mut cli: Cli) -> i32 {
+fn run(json: bool, cwd_arg: Option<PathBuf>, mut command: Command) -> i32 {
     // Outputs consumed by other programs keep their raw format even when CMW_JSON=1 is exported:
     // `eval "$(cmw shell-init zsh)"` needs a script, Claude Code's WorktreeCreate hook needs a bare path.
     let raw_output = matches!(
-        &cli.command,
+        &command,
         Command::ShellInit(_)
             | Command::Hook {
                 command: HookCommand::ClaudeCreate | HookCommand::ClaudeRemove
             }
     );
-    let ctx = Ctx::new(cli.json && !raw_output, command_name(&cli.command));
-    let cwd: PathBuf = match &cli.cwd {
-        Some(d) => match std::fs::canonicalize(d) {
-            Ok(p) => p,
-            Err(e) => {
-                return ctx.emit_error(&CmwError::not_found(format!("-C {}: {e}", d.display())));
-            }
-        },
-        None => match std::env::current_dir() {
-            Ok(p) => p,
-            Err(e) => {
-                return ctx.emit_error(&CmwError::error(format!(
-                    "cannot read current directory: {e}"
-                )));
-            }
-        },
+    let ctx = Ctx::new(json && !raw_output, command_name(&command));
+    let cwd = match resolve_cwd(cwd_arg.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return ctx.emit_error(&e),
     };
 
     // Resolve every path argument once against the effective directory (`-C` or cwd), so locking
@@ -146,7 +165,7 @@ fn run(mut cli: Cli) -> i32 {
             *path = cwd.join(&*path);
         }
     };
-    match &mut cli.command {
+    match &mut command {
         Command::New(a) => abs(&mut a.path),
         Command::Hydrate(a) => {
             abs(&mut a.path);
@@ -161,7 +180,7 @@ fn run(mut cli: Cli) -> i32 {
         _ => {}
     }
 
-    let mutating = match &cli.command {
+    let mutating = match &command {
         Command::New(_) | Command::Rm(_) => true,
         Command::Hydrate(a) => !a.dry_run,
         Command::Gc(a) => a.yes && !a.all,
@@ -173,7 +192,7 @@ fn run(mut cli: Cli) -> i32 {
         _ => false,
     };
     // Lock the repo that is actually mutated: an explicit target path may belong to another repo than cwd.
-    let lock_target: PathBuf = match &cli.command {
+    let lock_target: PathBuf = match &command {
         Command::Hydrate(a) => a.path.clone().unwrap_or_else(|| cwd.clone()),
         Command::Env {
             command: EnvCommand::Sync(a),
@@ -189,7 +208,7 @@ fn run(mut cli: Cli) -> i32 {
         None
     };
 
-    match &cli.command {
+    match &command {
         Command::New(a) => finish(&ctx, new::run(&ctx, &cwd, a)),
         Command::Hydrate(a) => finish(&ctx, hydrate::run(&ctx, &cwd, a)),
         Command::Ls(a) => finish(&ctx, inventory::ls(&ctx, &cwd, a)),

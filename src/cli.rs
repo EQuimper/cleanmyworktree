@@ -30,8 +30,9 @@ pub struct Cli {
     #[arg(short = 'C', global = true, value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// None opens the interactive TUI on a terminal; elsewhere it prints help (exit 2).
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]

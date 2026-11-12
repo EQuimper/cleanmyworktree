@@ -41,7 +41,7 @@ hydrated ~/.cmw/worktrees/shop/feat-login in 1.6s: 3 cloned, 2 copied, 4 skipped
 
 ```sh
 brew install equimper/tap/cmw
-eval "$(cmw shell-init zsh)"   # optional: adds `cmw cd <name>`; put it in ~/.zshrc
+eval "$(cmw shell-init zsh)"   # optional: `cmw cd <name>`, and Open in `cmw` changes directory; put it in ~/.zshrc
 ```
 
 macOS only for v0.1. Other options, including bash and fish, are in the [install guide](https://cmw.equimper.com/docs/install/).
@@ -49,6 +49,7 @@ macOS only for v0.1. Other options, including bash and fish, are in the [install
 ## Quick start
 
 ```sh
+cmw                           # interactive: browse, open, create, clean up
 cmw new feat/login            # create + hydrate; prints the path
 cmw cd feat/login             # jump into it (needs shell-init)
 cmw ls                        # branch, dirty, merged, idle, hydrated
