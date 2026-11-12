@@ -1,9 +1,10 @@
 //! Rendering. Pure functions of `App` + `Theme`, so screens are testable with `TestBackend`.
-use super::app::{App, IDLE_STEPS, Load, Modal, Row, Screen, Tone, idle_label, plural, tilde};
+use super::app::{App, Hit, IDLE_STEPS, Load, Modal, Row, Screen, Tone, idle_label, plural, tilde};
 use super::theme::Theme;
 use crate::output::human_bytes;
 use crate::{git, paths};
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -21,6 +22,7 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 const PAD: u16 = 2;
 
 pub fn render(f: &mut Frame, app: &App, t: &Theme) {
+    app.hits.borrow_mut().clear();
     let area = f.area();
     if area.width < 44 || area.height < 14 {
         let msg = Paragraph::new("Make the terminal a little bigger")
@@ -35,10 +37,13 @@ pub fn render(f: &mut Frame, app: &App, t: &Theme) {
         screen => page(f, main, app, t, screen),
     }
     render_toast(f, toast, app, t);
+    // Overlays own the mouse: what's underneath is not clickable.
     if let Some(m) = &app.modal {
-        modal(f, area, m, t);
+        app.hits.borrow_mut().clear();
+        modal(f, area, app, m, t);
     }
     if app.busy.is_some() {
+        app.hits.borrow_mut().clear();
         busy(f, area, app, t);
     }
 }
@@ -80,6 +85,71 @@ fn footer<'a>(keys: &[(&'a str, &'a str)], t: &Theme) -> Line<'a> {
         }
     }
     Line::from(spans)
+}
+
+fn hit(app: &App, rect: Rect, h: Hit) {
+    app.hits.borrow_mut().push((rect, h));
+}
+
+/// A full-width one-row target at `area.y + row`.
+fn row_hit(app: &App, area: Rect, row: usize, h: Hit) {
+    let y = area.y + row as u16;
+    if y < area.y + area.height {
+        hit(
+            app,
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+            h,
+        );
+    }
+}
+
+/// The key a footer label stands for, when clicking it should press that key.
+fn key_code(k: &str) -> Option<KeyCode> {
+    match k {
+        "Enter" => Some(KeyCode::Enter),
+        "Esc" => Some(KeyCode::Esc),
+        "Space" => Some(KeyCode::Char(' ')),
+        "Tab" => Some(KeyCode::Tab),
+        k if k.chars().count() == 1 => k
+            .chars()
+            .next()
+            .map(|c| KeyCode::Char(c.to_ascii_lowercase())),
+        _ => None,
+    }
+}
+
+/// Make each `footer()` segment drawn at (x, y) clickable.
+fn footer_hits(app: &App, keys: &[(&str, &str)], x: u16, y: u16) {
+    let mut cx = x;
+    for (i, (k, label)) in keys.iter().enumerate() {
+        if i > 0 {
+            cx += 5;
+        }
+        let w = (Span::raw(*k).width()
+            + if label.is_empty() {
+                0
+            } else {
+                1 + label.chars().count()
+            }) as u16;
+        if let Some(code) = key_code(k) {
+            hit(
+                app,
+                Rect {
+                    x: cx,
+                    y,
+                    width: w,
+                    height: 1,
+                },
+                Hit::Key(code),
+            );
+        }
+        cx += w;
+    }
 }
 
 fn scope_keys(app: &App) -> Option<(&'static str, &'static str)> {
@@ -140,8 +210,9 @@ fn home(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             concat!("v", env!("CARGO_PKG_VERSION")),
             t.fg(t.faint),
         )),
-        Line::default(),
+        update_pill(app, t),
     ];
+    let pill_w = info[4].width() as u16;
     if show_logo {
         let side = area.width >= LOGO_W + 4 + 20;
         for (i, row) in LOGO.iter().enumerate() {
@@ -152,20 +223,29 @@ fn home(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             }
             lines.push(Line::from(spans));
         }
+        if side && pill_w > 0 {
+            let pill = Rect {
+                x: area.x + LOGO_W + 4,
+                y: area.y + 4,
+                width: pill_w,
+                height: 1,
+            };
+            hit(app, pill, Hit::UpdatePill);
+        } else if pill_w > 0 {
+            row_hit(app, area, lines.len(), Hit::UpdatePill);
+            lines.push(info[4].clone());
+        }
         lines.push(Line::default());
     } else {
         lines.push(Line::from(vec![
             Span::styled("cmw", t.accent_bold()),
             Span::raw("  "),
-            Span::styled(
-                info[3]
-                    .spans
-                    .first()
-                    .map(|s| s.content.to_string())
-                    .unwrap_or_default(),
-                Style::new().add_modifier(Modifier::BOLD),
-            ),
+            info[1].spans.first().cloned().unwrap_or_default(),
         ]));
+        if pill_w > 0 {
+            row_hit(app, area, lines.len(), Hit::UpdatePill);
+            lines.push(info[4].clone());
+        }
         lines.push(Line::default());
     }
 
@@ -190,14 +270,30 @@ fn home(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         if let Some((badge, tone)) = badge(app, item.screen) {
             spans.push(Span::styled(badge, tone_style(t, tone)));
         }
+        row_hit(app, area, lines.len(), Hit::Menu(i));
         lines.push(Line::from(spans));
     }
     lines.push(Line::default());
     let mut keys = vec![("↑↓", ""), ("Enter", "")];
     keys.extend(scope_keys(app));
+    if app.update.is_some() {
+        keys.push(("U", "Update"));
+    }
     keys.push(("Q", "Quit"));
+    footer_hits(app, &keys, area.x, area.y + lines.len() as u16);
     lines.push(footer(&keys, t));
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// `↑ 0.2.0 available` as a button, or an empty line when up to date.
+fn update_pill<'a>(app: &App, t: &Theme) -> Line<'a> {
+    match &app.update {
+        Some(v) => Line::from(vec![
+            Span::styled(format!(" ↑ {v} available "), t.button()),
+            Span::styled("  U", t.fg(t.dim)),
+        ]),
+        None => Line::default(),
+    }
 }
 
 /// Live counts shown at the end of a home menu row.
@@ -328,6 +424,7 @@ fn page(f: &mut Frame, area: Rect, app: &App, t: &Theme, screen: Screen) {
         height: 1,
         ..foot
     };
+    footer_hits(app, &keys, foot.x, foot.y);
     f.render_widget(Paragraph::new(footer(&keys, t)), foot);
 
     match screen {
@@ -487,6 +584,7 @@ fn worktrees(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     for (pos, &i) in vis.iter().enumerate().skip(offset).take(height) {
         let r = &rows[i];
         let sel = pos == app.wt_sel;
+        row_hit(app, table, 1 + pos - offset, Hit::Row(pos));
         let mut spans = vec![Span::styled(if sel { "➤ " } else { "  " }, t.fg(t.accent))];
         if app.all {
             spans.push(Span::styled(pad(&r.repo, repo_w + 2), t.fg(t.dim)));
@@ -561,6 +659,8 @@ fn field<'a>(label: &'a str, value: &str, placeholder: &str, focus: bool, t: &Th
 }
 
 fn new(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
+    row_hit(app, area, 0, Hit::Row(0));
+    row_hit(app, area, 2, Hit::Row(1));
     let mut lines = vec![
         field(
             "Branch",
@@ -646,6 +746,7 @@ fn clean(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         let offset = scroll_offset(app.gc_sel, height);
         for (i, item) in r.would_remove.iter().enumerate().skip(offset).take(height) {
             let sel = i == app.gc_sel;
+            row_hit(app, area, 1 + i - offset, Hit::Row(i));
             let checked = app.gc_checked.get(i).copied().unwrap_or(false);
             let size = match app.size_of(&item.path) {
                 Some(b) => human_bytes(b),
@@ -764,6 +865,7 @@ fn slim(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 .take(height.max(1))
             {
                 let sel = i == app.slim_sel;
+                row_hit(app, area, 2 + i - offset, Hit::Row(i));
                 let bytes: u64 = w.items.iter().map(|i| i.apparent_bytes).sum();
                 let mut line = Line::from(vec![
                     Span::styled(if sel { "➤ " } else { "  " }, t.fg(t.accent)),
@@ -822,6 +924,7 @@ fn setup(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let mut lines = Vec::new();
     for (i, s) in app.setup.iter().enumerate() {
         let sel = i == app.setup_sel;
+        row_hit(app, area, i, Hit::Row(i));
         let (mark, mark_style) = match s.tone {
             None => ("→ ", t.fg(t.faint)),
             Some(Tone::Ok) => ("● ", t.fg(t.accent)),
@@ -888,7 +991,7 @@ fn wrapped_height(lines: &[Line], width: u16) -> u16 {
         .sum()
 }
 
-fn modal(f: &mut Frame, area: Rect, m: &Modal, t: &Theme) {
+fn modal(f: &mut Frame, area: Rect, app: &App, m: &Modal, t: &Theme) {
     let width = area.width.saturating_sub(6).min(76);
     let inner_w = width.saturating_sub(6);
     let (title, border, mut body, keys): (Line, Style, Vec<Line>, Vec<(&str, &str)>) = match m {
@@ -1004,8 +1107,13 @@ fn modal(f: &mut Frame, area: Rect, m: &Modal, t: &Theme) {
     body.push(Line::default());
     body.push(footer(&keys, t));
     let max_h = area.height.saturating_sub(4);
-    let height = (wrapped_height(&body, inner_w) + 3).min(max_h);
+    let content_h = wrapped_height(&body, inner_w);
+    let height = (content_h + 3).min(max_h);
     let rect = center(area, width, height);
+    // Inside the border (1) and padding (2 left, 1 top), the footer is the last content row.
+    if content_h + 3 <= max_h {
+        footer_hits(app, &keys, rect.x + 3, rect.y + 2 + content_h - 1);
+    }
     f.render_widget(Clear, rect);
     f.render_widget(
         Paragraph::new(Text::from(body))

@@ -303,3 +303,142 @@ fn refused_remove_needs_the_exact_branch_name_to_force() {
     assert!(app.modal.is_none());
     assert_eq!(app.busy.as_ref().unwrap().label, "Removing feat/cart");
 }
+
+/// Render, then return the cell where `needle` starts.
+fn locate(app: &App, needle: &str) -> (u16, u16) {
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let theme = Theme::new(Mode::Dark, true, false);
+    term.draw(|f| ui::render(f, app, &theme)).unwrap();
+    let buf = term.backend().buffer();
+    for y in 0..buf.area.height {
+        let cells: Vec<String> = (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_string())
+            .collect();
+        let line: String = cells.concat();
+        if let Some(byte) = line.find(needle) {
+            // Map the byte offset back to a column.
+            let mut acc = 0;
+            for (x, c) in cells.iter().enumerate() {
+                if acc >= byte {
+                    return (x as u16, y);
+                }
+                acc += c.len();
+            }
+        }
+    }
+    panic!("{needle:?} not on screen:\n{}", screen_text(app));
+}
+
+fn click(app: &mut App, needle: &str) {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (column, row) = locate(app, needle);
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+#[test]
+fn update_pill_and_shortcut_appear_only_when_a_release_is_newer() {
+    let mut app = app();
+    assert!(!screen_text(&app).contains("available"));
+    app.update = Some("9.9.9".into());
+    let text = screen_text(&app);
+    assert!(text.contains("↑ 9.9.9 available"), "{text}");
+    assert!(text.contains("U Update"), "{text}");
+}
+
+#[test]
+fn clicking_the_update_pill_or_pressing_u_asks_first() {
+    let mut app = app();
+    app.update = Some("9.9.9".into());
+    click(&mut app, "↑ 9.9.9 available");
+    // Test binaries aren't installed by brew/installer, so this explains how to update by hand;
+    // either way nothing runs without a confirmation.
+    assert!(app.modal.is_some());
+    assert!(app.busy.is_none());
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Char('u'));
+    assert!(app.modal.is_some());
+}
+
+#[test]
+fn a_finished_update_restarts_the_tui() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    app.on_msg(Msg::Done(Done::Update {
+        res: Ok(crate::update::UpdateReport {
+            current: "0.1.0".into(),
+            latest: Some("0.2.0".into()),
+            update_available: true,
+            method: "homebrew",
+            command: Some("brew upgrade equimper/tap/cmw".into()),
+            updated: true,
+            installed: Some("0.2.0".into()),
+        }),
+        warnings: vec![],
+    }));
+    assert!(app.quit && app.restart);
+}
+
+#[test]
+fn clicking_a_menu_item_opens_it_and_esc_back_returns() {
+    let mut app = app();
+    click(&mut app, "3. Clean");
+    assert_eq!(app.screen, Screen::Clean);
+    click(&mut app, "Esc Back");
+    assert_eq!(app.screen, Screen::Home);
+}
+
+#[test]
+fn click_selects_a_row_and_a_second_click_opens_it() {
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    click(&mut app, "feat/done");
+    assert_eq!(app.wt_sel, 1);
+    assert!(!app.quit);
+    click(&mut app, "feat/done");
+    assert!(app.quit);
+    assert_eq!(app.cd_on_exit, Some(PathBuf::from("/tmp")));
+}
+
+#[test]
+fn wheel_scrolls_lists() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    let wheel = |app: &mut App, kind| {
+        app.on_mouse(MouseEvent {
+            kind,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    wheel(&mut app, MouseEventKind::ScrollDown);
+    wheel(&mut app, MouseEventKind::ScrollDown);
+    assert_eq!(app.wt_sel, 2);
+    wheel(&mut app, MouseEventKind::ScrollUp);
+    assert_eq!(app.wt_sel, 1);
+}
+
+#[test]
+fn modal_buttons_are_clickable_and_cover_the_page() {
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('d'));
+    // The rows under the dialog must not react while it is open.
+    screen_text(&app);
+    assert!(
+        !app.hits
+            .borrow()
+            .iter()
+            .any(|(_, h)| matches!(h, super::app::Hit::Row(_)))
+    );
+    click(&mut app, "Esc Cancel");
+    assert!(app.modal.is_none());
+    assert!(app.busy.is_none());
+}

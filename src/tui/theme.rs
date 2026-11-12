@@ -21,6 +21,8 @@ pub struct Theme {
     pub danger: Color,
     pub info: Color,
     pub sel_bg: Color,
+    /// Text drawn on an accent background.
+    pub on_accent: Color,
     truecolor: bool,
     plain: bool,
 }
@@ -64,6 +66,7 @@ impl Theme {
                 danger: pick(0xFF8F7A, 210),
                 info: pick(0x7AB8FF, 111),
                 sel_bg: pick(0x1B2B24, 236),
+                on_accent: pick(0x08140E, 16),
                 truecolor,
                 plain,
             },
@@ -76,6 +79,7 @@ impl Theme {
                 danger: pick(0xC93B3B, 160),
                 info: pick(0x1F5FD1, 26),
                 sel_bg: pick(0xDDF5E9, 194),
+                on_accent: pick(0xFFFFFF, 231),
                 truecolor,
                 plain,
             },
@@ -90,6 +94,7 @@ impl Theme {
                 danger: Color::Reset,
                 info: Color::Reset,
                 sel_bg: Color::Reset,
+                on_accent: Color::Reset,
                 ..t
             }
         } else {
@@ -103,6 +108,18 @@ impl Theme {
 
     pub fn accent_bold(&self) -> Style {
         Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
+    }
+
+    /// A clickable pill: dark text on the accent.
+    pub fn button(&self) -> Style {
+        if self.plain {
+            Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::new()
+                .bg(self.accent)
+                .fg(self.on_accent)
+                .add_modifier(Modifier::BOLD)
+        }
     }
 
     /// Highlighted row. Without colors, reverse video keeps it visible.

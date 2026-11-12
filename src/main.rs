@@ -14,6 +14,7 @@ mod rules;
 mod shell;
 mod skill;
 mod tui;
+mod update;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
 use cli::{Cli, Command, EnvCommand, HookCommand, SkillCommand};
@@ -106,6 +107,7 @@ fn command_name(c: &Command) -> &'static str {
         Command::CleanArtifacts(_) => "clean-artifacts",
         Command::Env { .. } => "env sync",
         Command::ShellInit(_) => "shell-init",
+        Command::Update(_) => "update",
         Command::Skill {
             command: SkillCommand::Install { .. },
         } => "skill install",
@@ -220,6 +222,7 @@ fn run(json: bool, cwd_arg: Option<PathBuf>, mut command: Command) -> i32 {
             command: EnvCommand::Sync(a),
         } => finish(&ctx, env::sync(&ctx, &cwd, a)),
         Command::ShellInit(a) => finish(&ctx, Ok(shell::init(a))),
+        Command::Update(a) => finish(&ctx, update::run(&ctx, a)),
         Command::Skill {
             command: SkillCommand::Install { dir },
         } => finish(&ctx, skill::install(&ctx, dir.as_deref())),

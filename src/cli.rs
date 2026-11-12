@@ -63,6 +63,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Upgrade cmw to the latest release (Homebrew, installer or cargo). --check only reports.
+    Update(UpdateArgs),
     /// Print hook configuration that wires cmw into an agent tool.
     Hook {
         #[command(subcommand)]
@@ -122,6 +124,13 @@ pub struct LsArgs {
     /// Include apparent disk size per worktree (slower; clones are counted at full size).
     #[arg(long)]
     pub sizes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// Only report the current and latest versions; change nothing.
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args, Debug)]

@@ -58,6 +58,7 @@ cmw rm feat/login             # remove the worktree, its caches, and the branch 
 cmw gc                        # dry run: what is safe to remove
 cmw gc --yes                  # remove it and report the real space freed
 cmw clean-artifacts --yes     # strip DerivedData/.cxx/build/.next from idle worktrees
+cmw update                    # upgrade through Homebrew, the installer or cargo
 ```
 
 `cmw new` puts worktrees in `~/.cmw/worktrees/<repo>/<branch>`; set `$CMW_HOME` to change that. Every other command works on any git worktree, including the ones under `~/.t3/worktrees`. `ls --all`, `gc --all` and `clean-artifacts --all` scan `~/.cmw/worktrees`, `~/.t3/worktrees` and any folders listed in `$CMW_SCAN_ROOTS`.

@@ -24,7 +24,12 @@ With no arguments in a terminal, cmw opens an interactive screen: browse worktre
 | `A` | Switch between this repo and all repos |
 | `/` | Filter worktrees |
 | `H` `E` `D` | Hydrate, sync env, remove the selected worktree |
+| `U` | Update cmw, when a newer release is out |
 | `Esc` / `Q` | Back / quit |
+
+Everything is also clickable: menu items, rows (click to select, click again to open), the shortcuts in the footer and dialog buttons. The wheel scrolls lists. To select text in the terminal while cmw is open, hold Option (Terminal, iTerm2) or Shift while dragging.
+
+When a newer release exists, the home screen shows it next to the logo. Click it or press `U` to update; cmw restarts on the new version when it's done.
 
 Removing asks first. If cmw refuses because of uncommitted or unpushed work, you can type the branch name to force it.
 
@@ -110,6 +115,16 @@ Re-copy secrets and config from the main checkout. Files changed in the worktree
 | `--dry-run` | Show what would change. |
 | `--force` | Overwrite files that differ in the worktree. |
 
+## `cmw update`
+
+Upgrade cmw to the latest release through whatever installed it: `brew upgrade equimper/tap/cmw` for Homebrew, the release installer script for the shell installer, `cargo install cmw --locked` for crates.io. A build from a source checkout can't update itself, so cmw refuses (exit 3) with the command to run instead.
+
+| Flag | Effect |
+| --- | --- |
+| `--check` | Only report the current and latest versions, the install method and the upgrade command. |
+
+The latest version is read from GitHub's `releases/latest` redirect. Only `cmw update` and the interactive screen check for updates; the interactive screen checks at most once a day. Other commands never touch the network.
+
 ## `cmw shell-init <shell>`
 
 Print the shell function that adds `cmw cd`, and lets **Open** in the interactive screen change your directory. `<shell>` is `zsh`, `bash` or `fish`.
@@ -135,3 +150,4 @@ Print Claude Code `settings.json` hooks that create and remove worktrees through
 | `CMW_SCAN_ROOTS` | Extra folders for `--all`, separated by `:`. |
 | `CMW_THEME` | `light` or `dark` for the interactive screen. Default: detected from the terminal. |
 | `NO_COLOR` | Any value turns off colors in the interactive screen. |
+| `CMW_NO_UPDATE_CHECK` | `1` stops the interactive screen from checking for new releases. |

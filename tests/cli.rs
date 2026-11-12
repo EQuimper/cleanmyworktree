@@ -425,3 +425,96 @@ fn bare_cmw_json_is_a_usage_error() {
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"]["kind"], "usage");
 }
+
+/// Serve one canned HTTP response per connection, like GitHub's `releases/latest` redirect.
+fn fake_releases(status_line: &'static str, location: &'static str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status_line}\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    format!("http://{addr}/EQuimper/cleanmyworktree/releases/latest")
+}
+
+#[test]
+fn update_check_reports_a_newer_release() {
+    let sb = Sandbox::new();
+    let url = fake_releases(
+        "302 Found",
+        "https://github.com/EQuimper/cleanmyworktree/releases/tag/v99.0.0",
+    );
+    let out = sb
+        .cmd()
+        .args(["--json", "update", "--check"])
+        .env("CMW_UPDATE_URL", &url)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["latest"], "99.0.0");
+    assert_eq!(v["data"]["update_available"], true);
+    assert_eq!(v["data"]["updated"], false);
+}
+
+#[test]
+fn update_refuses_for_a_source_build_with_a_fix() {
+    // Test binaries live in target/, i.e. not installed by Homebrew, the installer or cargo.
+    let sb = Sandbox::new();
+    let url = fake_releases(
+        "302 Found",
+        "https://github.com/EQuimper/cleanmyworktree/releases/tag/v99.0.0",
+    );
+    let out = sb
+        .cmd()
+        .args(["--json", "update"])
+        .env("CMW_UPDATE_URL", &url)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["error"]["kind"], "refused");
+    assert!(
+        v["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("brew install")
+    );
+}
+
+#[test]
+fn update_with_no_release_is_up_to_date_and_offline_failure_is_an_error() {
+    let sb = Sandbox::new();
+    let url = fake_releases("404 Not Found", "");
+    let out = sb
+        .cmd()
+        .args(["update"])
+        .env("CMW_UPDATE_URL", &url)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("no published release"));
+
+    let (code, v) = {
+        let out = sb
+            .cmd()
+            .args(["--json", "update"])
+            .env("CMW_UPDATE_URL", "http://127.0.0.1:9/")
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap(),
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap(),
+        )
+    };
+    assert_eq!(code, 1);
+    assert_eq!(v["ok"], false);
+}

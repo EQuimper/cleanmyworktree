@@ -4,7 +4,11 @@ use crate::gc::{CleanArtifactsReport, GcReport};
 use crate::inventory::WorktreeStatus;
 use crate::output::{CmwError, Ctx, ErrorKind, human_bytes};
 use crate::{git, skill};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::Rect;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -120,6 +124,19 @@ pub enum Action {
     Clean { picked: Vec<Target> },
     Slim { idle: u64 },
     InstallShell { rc: PathBuf, line: String },
+    Update,
+}
+
+/// Something clickable, recorded by the renderer each frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hit {
+    /// Acts like pressing this key (footer shortcuts, modal buttons).
+    Key(KeyCode),
+    /// Home menu entry.
+    Menu(usize),
+    /// Row `n` of the current screen's list.
+    Row(usize),
+    UpdatePill,
 }
 
 pub enum Modal {
@@ -193,6 +210,12 @@ pub struct App {
     pub cd_on_exit: Option<PathBuf>,
     pub quit: bool,
     pub shell_wrapper: bool,
+    /// A newer release, once the background check finds one.
+    pub update: Option<String>,
+    /// Re-launch cmw after quitting (set after a successful update).
+    pub restart: bool,
+    /// Clickable areas of the last frame, topmost last.
+    pub hits: RefCell<Vec<(Rect, Hit)>>,
     ctrl_c_armed: bool,
     tx: Sender<Msg>,
     size_cancel: Arc<AtomicBool>,
@@ -256,6 +279,9 @@ impl App {
             cd_on_exit: None,
             quit: false,
             shell_wrapper: std::env::var_os("CMW_CD_FILE").is_some(),
+            update: None,
+            restart: false,
+            hits: RefCell::new(Vec::new()),
             ctrl_c_armed: false,
             tx,
             size_cancel: Arc::new(AtomicBool::new(false)),
@@ -312,8 +338,14 @@ impl App {
     // Messages from background jobs
     // -----------------------------------------------------------------------------------------
 
+    /// Start the background release check (not part of `new`, so tests stay offline).
+    pub fn check_update(&self) {
+        jobs::check_update(&self.tx);
+    }
+
     pub fn on_msg(&mut self, msg: Msg) {
         match msg {
+            Msg::UpdateAvailable(v) => self.update = v,
             Msg::Ls { generation, res } if generation == self.generation => match res {
                 Ok(report) => {
                     let rows = self.build_rows(report);
@@ -488,6 +520,21 @@ impl App {
                 }
                 self.reload();
             }
+            Done::Update { res, warnings } => match res {
+                Ok(r) if r.updated => {
+                    self.restart = true;
+                    self.quit = true;
+                }
+                Ok(r) => {
+                    self.update = None;
+                    let mut msg = crate::output::Report::human(&r);
+                    if !warnings.is_empty() {
+                        msg = jobs::with_warnings(msg, &warnings);
+                    }
+                    self.toast(msg.lines().next().unwrap_or_default(), Tone::Ok);
+                }
+                Err(e) => self.show_error("Update failed", &e),
+            },
             Done::Text { title, res } => {
                 match res {
                     Ok(text) => {
@@ -610,6 +657,10 @@ impl App {
                 self.reload();
                 return;
             }
+            KeyCode::Char('u') | KeyCode::Char('U') if self.update.is_some() => {
+                self.ask_update();
+                return;
+            }
             _ => {}
         }
         match self.screen {
@@ -619,6 +670,129 @@ impl App {
             Screen::Slim => self.on_slim_key(key),
             Screen::Setup => self.on_setup_key(key),
             Screen::New => {}
+        }
+    }
+
+    fn ask_update(&mut self) {
+        let Some(latest) = self.update.clone() else {
+            return;
+        };
+        let method = crate::update::detect();
+        match method.command() {
+            Some(cmd) => {
+                self.modal = Some(Modal::Confirm {
+                    title: format!("Update cmw to {latest}?"),
+                    lines: vec![
+                        format!("Runs {cmd}"),
+                        String::new(),
+                        "cmw restarts on the new version when it's done.".into(),
+                    ],
+                    danger: false,
+                    action: Action::Update,
+                });
+            }
+            None => {
+                self.modal = Some(Modal::Result {
+                    title: format!("cmw {latest} is available"),
+                    text: format!(
+                        "This cmw ({}) was built from source, so it can't update itself.\n\nfix: {}",
+                        crate::update::CURRENT,
+                        method.manual_hint()
+                    ),
+                    tone: Tone::Warn,
+                    open: None,
+                    scroll: 0,
+                });
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Mouse
+    // -----------------------------------------------------------------------------------------
+
+    pub fn on_mouse(&mut self, m: MouseEvent) {
+        if self.busy.is_some() {
+            return;
+        }
+        let press =
+            |app: &mut App, code: KeyCode| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = m.kind == MouseEventKind::ScrollUp;
+                let typing_form = self.screen == Screen::New && self.modal.is_none();
+                let other_modal = matches!(
+                    self.modal,
+                    Some(Modal::Confirm { .. } | Modal::TypeToConfirm { .. })
+                );
+                if !typing_form && !other_modal {
+                    press(self, if up { KeyCode::Up } else { KeyCode::Down });
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let hit = self
+                    .hits
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find(|(r, _)| {
+                        m.column >= r.x
+                            && m.column < r.x + r.width
+                            && m.row >= r.y
+                            && m.row < r.y + r.height
+                    })
+                    .map(|(_, h)| *h);
+                if let Some(hit) = hit {
+                    self.on_hit(hit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_hit(&mut self, hit: Hit) {
+        let press =
+            |app: &mut App, code: KeyCode| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        match hit {
+            Hit::Key(code) => press(self, code),
+            Hit::UpdatePill => self.ask_update(),
+            Hit::Menu(i) => {
+                let menu = self.menu();
+                if let Some(item) = menu.get(i) {
+                    self.home_sel = i;
+                    self.enter(item.screen);
+                }
+            }
+            // Click selects; clicking the selected row activates it.
+            Hit::Row(i) => match self.screen {
+                Screen::Worktrees => {
+                    self.filtering = false;
+                    if self.wt_sel == i {
+                        self.open_selected();
+                    } else {
+                        self.wt_sel = i;
+                    }
+                }
+                Screen::Clean => {
+                    if self.gc_sel == i {
+                        press(self, KeyCode::Char(' '));
+                    } else {
+                        self.gc_sel = i;
+                    }
+                }
+                Screen::Slim => self.slim_sel = i,
+                Screen::Setup => {
+                    if self.setup_sel == i {
+                        press(self, KeyCode::Enter);
+                    } else {
+                        self.setup_sel = i;
+                    }
+                }
+                Screen::New => {
+                    self.new_focus = i.min(1);
+                }
+                Screen::Home => {}
+            },
         }
     }
 
@@ -1158,6 +1332,11 @@ impl App {
             Action::Slim { idle } => {
                 self.start_busy("Deleting build caches".into());
                 jobs::slim(&self.tx, &self.cwd, self.all, idle);
+            }
+            Action::Update => {
+                let to = self.update.clone().unwrap_or_default();
+                self.start_busy(format!("Updating cmw to {to}"));
+                jobs::run_update(&self.tx);
             }
             Action::InstallShell { rc, line } => {
                 match append_line(&rc, &line) {

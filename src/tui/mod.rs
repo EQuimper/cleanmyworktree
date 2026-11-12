@@ -8,9 +8,10 @@ mod theme;
 mod ui;
 
 use app::App;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use ratatui::crossterm::execute;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ pub fn run(cwd: PathBuf) -> i32 {
     let (tx, rx) = mpsc::channel();
     let mut app = App::new(cwd, tx);
     app.reload();
+    app.check_update();
 
     let mut terminal = match ratatui::try_init() {
         Ok(t) => t,
@@ -38,12 +40,20 @@ pub fn run(cwd: PathBuf) -> i32 {
             return 1;
         }
     };
+    // Clicks and the wheel. Undo it on panic too (ratatui's hook only restores the screen).
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    let restore_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        restore_hook(info);
+    }));
     let result = (|| -> std::io::Result<()> {
         while !app.quit {
             terminal.draw(|f| ui::render(f, &app, &theme))?;
             if event::poll(Duration::from_millis(80))? {
                 match event::read()? {
                     Event::Key(key) => app.on_key(key),
+                    Event::Mouse(m) => app.on_mouse(m),
                     Event::Resize(..) => {}
                     _ => {}
                 }
@@ -55,12 +65,34 @@ pub fn run(cwd: PathBuf) -> i32 {
         }
         Ok(())
     })();
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     if let Err(e) = result {
         eprintln!("error: {e}");
         return 1;
     }
+    if app.restart {
+        return restart(&app.cwd, app.cd_on_exit);
+    }
     hand_off_directory(app.cd_on_exit);
+    0
+}
+
+/// After an update: replace this process with the newly installed cmw, back in the TUI.
+fn restart(cwd: &Path, cd: Option<PathBuf>) -> i32 {
+    use std::os::unix::process::CommandExt;
+    // Keep a pending `cd` (e.g. away from a removed worktree) for the shell wrapper.
+    if cd.is_some() && std::env::var_os("CMW_CD_FILE").is_some() {
+        hand_off_directory(cd);
+    }
+    let exe = crate::paths::find_in_path("cmw")
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_else(|| PathBuf::from("cmw"));
+    let err = std::process::Command::new(&exe).arg("-C").arg(cwd).exec();
+    eprintln!(
+        "cmw was updated. Run `cmw` again ({}: {err}).",
+        exe.display()
+    );
     0
 }
 

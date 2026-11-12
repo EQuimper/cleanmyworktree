@@ -33,6 +33,8 @@ pub enum Msg {
         idle: u64,
         res: Result<CleanArtifactsReport>,
     },
+    /// Result of the background release check: a newer version, if any.
+    UpdateAvailable(Option<String>),
     /// A progress or warning line from the running task.
     Progress(String),
     Done(Done),
@@ -47,6 +49,10 @@ pub enum Done {
         target: Target,
         force: bool,
         res: Result<RmReport>,
+        warnings: Vec<String>,
+    },
+    Update {
+        res: Result<crate::update::UpdateReport>,
         warnings: Vec<String>,
     },
     /// Any other task: a title and the command's human-readable report.
@@ -86,6 +92,25 @@ fn streaming(command: &'static str, tx: &Sender<Msg>) -> Ctx {
 
 fn spawn(f: impl FnOnce() + Send + 'static) {
     std::thread::spawn(f);
+}
+
+/// Look for a newer release (cached for a day; silent on failure).
+pub fn check_update(tx: &Sender<Msg>) {
+    let tx = tx.clone();
+    spawn(move || {
+        let _ = tx.send(Msg::UpdateAvailable(crate::update::available_quietly()));
+    });
+}
+
+/// Upgrade cmw through whatever installed it, streaming the installer's output.
+pub fn run_update(tx: &Sender<Msg>) {
+    let tx = tx.clone();
+    spawn(move || {
+        let ctx = streaming("update", &tx);
+        let res = crate::update::run(&ctx, &crate::cli::UpdateArgs { check: false });
+        let warnings = ctx.warnings();
+        let _ = tx.send(Msg::Done(Done::Update { res, warnings }));
+    });
 }
 
 pub fn load_ls(tx: &Sender<Msg>, cwd: &Path, all: bool, generation: u64) {
