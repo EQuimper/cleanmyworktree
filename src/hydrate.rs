@@ -364,6 +364,28 @@ pub fn hydrate(
         };
         if unchanged {
             state.installs.insert(k, v);
+            continue;
+        }
+        // A hook rewrote this dep dir after the install phase judged it current, so this run's
+        // `up_to_date` no longer holds: tell the caller exactly what to re-run.
+        if let Some((dir, lockfile)) = k.split_once('|')
+            && let Some(installer) = rules::installers().iter().find(|i| i.lockfile == lockfile)
+        {
+            let planned = PlannedInstall {
+                installer,
+                dir: dir.to_string(),
+            };
+            let dep = record_dep_rel(&k).unwrap_or_default();
+            ctx.warn(format!(
+                "post-hydrate hook changed {dep}; run: {}",
+                planned.command()
+            ));
+            needs_setup.push(NeedsSetup {
+                dir: dir.to_string(),
+                ecosystem: installer.ecosystem.to_string(),
+                command: planned.command(),
+                reason: format!("post-hydrate hook changed {dep}"),
+            });
         }
     }
 
@@ -1416,8 +1438,14 @@ mod tests {
             no_install: true,
             no_slow: false,
         };
-        hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        let r = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
         assert!(read_state(&wt).installs.is_empty());
+        assert!(
+            !r.ready,
+            "deps replaced by a hook must not be reported ready"
+        );
+        assert_eq!(r.needs_setup.len(), 1);
+        assert!(r.needs_setup[0].command.contains("npm install"));
     }
 
     #[test]
