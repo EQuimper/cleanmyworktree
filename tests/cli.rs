@@ -48,7 +48,6 @@ fn new_json_envelope() {
 }
 
 #[test]
-#[ignore = "bug: CMW_JSON=1 rejected by clap (bool env needs BoolishValueParser); only true/false accepted"]
 fn new_json_via_env_var() {
     let sb = Sandbox::new();
     let wt2 = sb.wt("wt2");

@@ -23,7 +23,7 @@ Agent-friendly by design:
 #[command(name = "cmw", version, about = "Fast, disk-cheap git worktrees for humans and AI agents", long_about = LONG_ABOUT)]
 pub struct Cli {
     /// Emit a single JSON document on stdout (also: CMW_JSON=1).
-    #[arg(long, global = true, env = "CMW_JSON")]
+    #[arg(long, global = true, env = "CMW_JSON", value_parser = clap::builder::FalseyValueParser::new())]
     pub json: bool,
 
     /// Run as if started in this directory (like `git -C`).
