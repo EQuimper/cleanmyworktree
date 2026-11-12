@@ -1,0 +1,21 @@
+---
+import type { Step } from '../lib/duel';
+
+interface Props {
+  steps: Step[];
+}
+
+const { steps } = Astro.props;
+---
+
+{
+  steps.map((step) =>
+    'cmd' in step ? (
+      <span class="line"><span class="prompt">{step.prompt} </span><span class="cmd">{step.cmd}</span></span>
+    ) : 'out' in step ? (
+      <span class="line out">{step.out}{step.ok && <span class="ok">{step.ok}</span>}</span>
+    ) : 'idle' in step ? (
+      <span class="line"><span class="prompt">{step.idle} </span><span class="cursor" /></span>
+    ) : null,
+  )
+}

@@ -1,5 +1,6 @@
 ---
 import { sessions } from '../lib/duel';
+import TtyLines from './TtyLines.astro';
 ---
 
 <figure class="duel" data-duel aria-label="Setting up the same worktree with plain git and with cmw">
@@ -13,16 +14,9 @@ import { sessions } from '../lib/duel';
             <span class="ff" data-ff hidden>▶▶ 30×</span>
             <span class="clock" data-clock>{s.finalClock}</span>
           </div>
-          <div class="tty-screen" data-screen>
-            {s.steps.map((step) =>
-              'cmd' in step ? (
-                <span class="line"><span class="prompt">{step.prompt} </span><span class="cmd">{step.cmd}</span></span>
-              ) : 'out' in step ? (
-                <span class="line out">{step.out}{step.ok && <span class="ok">{step.ok}</span>}</span>
-              ) : 'idle' in step ? (
-                <span class="line"><span class="prompt">{step.idle} </span><span class="cursor" /></span>
-              ) : null,
-            )}
+          <div class="tty-screen">
+            <div class="ghost" aria-hidden="true"><TtyLines steps={s.steps} /></div>
+            <div class="live" data-screen><TtyLines steps={s.steps} /></div>
           </div>
           <p class="tty-foot">{s.disk}</p>
         </div>

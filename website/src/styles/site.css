@@ -402,12 +402,22 @@ h1 {
 }
 
 .tty-screen {
+  display: grid;
   flex: 1;
-  min-height: 12.5rem;
   padding: 1rem 1.1rem 1.25rem;
   font-family: var(--font-mono);
   font-size: clamp(0.68rem, 0.95vw, 0.76rem);
   line-height: 1.75;
+}
+
+/* The finished output, invisible, holds the height while the live copy plays. */
+.tty-screen > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.ghost {
+  visibility: hidden;
 }
 
 .tty-screen .line {
@@ -504,9 +514,6 @@ h1 {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .tty-screen {
-    min-height: 0;
-  }
 }
 
 /* A new worktree starts empty */
