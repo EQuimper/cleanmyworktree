@@ -7,7 +7,7 @@ use crate::rules::{self, Installer, NATIVE_STAMP_FILES, RuleSet, Strategy};
 use crate::{config, git};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -148,7 +148,14 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
     let mut native_dirs: Vec<String> = Vec::new();
     let mut needs_setup = Vec::new();
 
+    let mut state = read_state(target);
+
+    let mut ignored = Vec::new();
     for entry in git::ignored_entries(source)? {
+        expand_agent_dirs(&rules, source, entry, &mut ignored);
+    }
+
+    for entry in ignored {
         let Some(rule) = rules.classify(&entry, false) else {
             unmatched.push(entry);
             continue;
@@ -175,7 +182,12 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
                     }
                     "cloned"
                 } else {
-                    clone::copy_file(&src, &dst)?;
+                    if std::fs::symlink_metadata(&src).is_ok_and(|m| m.file_type().is_symlink()) {
+                        // Copy the link itself; fs::copy would follow it out of the checkout.
+                        clone::copy_recursive(&src, &dst)?;
+                    } else {
+                        clone::copy_file(&src, &dst)?;
+                    }
                     "copied"
                 }
             }
@@ -210,7 +222,7 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
     let mut installs = Vec::new();
     if !install.no_install {
         for p in &plan {
-            installs.push(run_install(ctx, source, target, p, install, dry_run));
+            installs.push(run_install(ctx, source, target, p, install, dry_run, &mut state.installs));
         }
         for item in &installs {
             match item.status {
@@ -271,13 +283,16 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
     ready = ready && needs_setup.is_empty() && stale_native.is_empty();
 
     if !dry_run {
-        let state = serde_json::json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "hydrated_at_unix": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-            "source": source,
-        });
+        let mut out = state.raw;
+        out.insert("version".into(), env!("CARGO_PKG_VERSION").into());
+        out.insert(
+            "hydrated_at_unix".into(),
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).into(),
+        );
+        out.insert("source".into(), serde_json::json!(source));
+        out.insert("installs".into(), serde_json::json!(state.installs));
         let path = git::git_dir(target)?.join(STATE_FILE);
-        std::fs::write(&path, serde_json::to_string_pretty(&state).expect("serializable state"))?;
+        std::fs::write(&path, serde_json::to_string_pretty(&out).expect("serializable state"))?;
     }
 
     Ok(HydrateReport {
@@ -293,6 +308,53 @@ pub fn hydrate(ctx: &Ctx, source: &Path, target: &Path, dry_run: bool, install: 
         stale_native,
         needs_setup,
     })
+}
+
+/// Previous `STATE_FILE` contents: unknown fields are preserved on rewrite.
+struct HydrateState {
+    raw: serde_json::Map<String, serde_json::Value>,
+    /// `"<rel dir>|<lockfile>"` -> sha256 of the target lockfile when its deps were last made consistent.
+    installs: BTreeMap<String, String>,
+}
+
+fn read_state(target: &Path) -> HydrateState {
+    let raw: serde_json::Map<String, serde_json::Value> = git::git_dir(target)
+        .ok()
+        .and_then(|d| std::fs::read(d.join(STATE_FILE)).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let installs = raw
+        .get("installs")
+        .and_then(|v| v.as_object())
+        .map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
+        .unwrap_or_default();
+    HydrateState { raw, installs }
+}
+
+/// Push `entry` onto `out`. Ignored agent-config containers (`.claude/`, `.agents/`, `.grok/`) are
+/// never cloned wholesale: git collapses them into one entry, which would bypass child rules such
+/// as `**/.claude/worktrees` (Skip) and duplicate whole worktrees. They are walked instead, each
+/// child classified on its own. Symlinks are never followed: a symlink is a file entry (copied as
+/// a link), even if it points at a directory.
+fn expand_agent_dirs(rules: &RuleSet, source: &Path, entry: String, out: &mut Vec<String>) {
+    let is_agent_clone = entry.ends_with('/')
+        && rules.classify(&entry, false).is_some_and(|r| r.strategy == Strategy::Clone && r.ecosystem == "agent");
+    if !is_agent_clone {
+        out.push(entry);
+        return;
+    }
+    let Ok(read) = std::fs::read_dir(source.join(entry.trim_end_matches('/'))) else {
+        out.push(entry);
+        return;
+    };
+    let mut children: Vec<_> = read.flatten().collect();
+    children.sort_by_key(|e| e.file_name());
+    for c in children {
+        let is_dir = c.file_type().is_ok_and(|t| t.is_dir()); // false for symlinks
+        let name = c.file_name().to_string_lossy().into_owned();
+        let child = format!("{entry}{name}{}", if is_dir { "/" } else { "" });
+        expand_agent_dirs(rules, source, child, out);
+    }
 }
 
 fn parent_of(rel: &str) -> &str {
@@ -398,6 +460,7 @@ fn run_install(
     p: &PlannedInstall,
     flags: InstallFlags,
     dry_run: bool,
+    recorded: &mut BTreeMap<String, String>,
 ) -> InstallItem {
     let inst = p.installer;
     let lock_rel = p.lockfile_rel();
@@ -410,7 +473,23 @@ fn run_install(
         reason: None,
     };
     let dep_ok = inst.dep_dir.is_none_or(|d| target.join(&p.dir).join(d).exists());
-    if hash_file(&source.join(&lock_rel)).is_some_and(|h| Some(h) == hash_file(&target.join(&lock_rel))) && dep_ok {
+    let key = format!("{}|{}", p.dir, inst.lockfile);
+    let current = hash_file(&target.join(&lock_rel));
+    let up_to_date = dep_ok
+        && match (recorded.get(&key), &current) {
+            // (a) provenance known: the deps were last made consistent with exactly this lockfile.
+            (Some(rec), Some(cur)) => rec == cur,
+            (Some(_), None) => false,
+            // No record. (b) dep dir freshly cloned from main in this run: it mirrors main, so
+            // compare lockfiles. (c) dep dir pre-existed (hydrated by something else): same rule,
+            // an assumption that it was built from main's lockfile.
+            (None, Some(cur)) => hash_file(&source.join(&lock_rel)).is_some_and(|h| &h == cur),
+            (None, None) => false,
+        };
+    if up_to_date {
+        if !dry_run {
+            recorded.insert(key, current.expect("up to date implies a readable lockfile"));
+        }
         return item;
     }
     if inst.slow && flags.no_slow {
@@ -436,7 +515,13 @@ fn run_install(
         .stdin(Stdio::null())
         .output();
     match out {
-        Ok(o) if o.status.success() => item.status = "ran",
+        Ok(o) if o.status.success() => {
+            item.status = "ran";
+            // Hash after the install: it may legitimately rewrite the lockfile.
+            if let Some(h) = hash_file(&target.join(&lock_rel)) {
+                recorded.insert(key, h);
+            }
+        }
         Ok(o) => {
             item.status = "failed";
             let t = tail(&o.stderr, &o.stdout);
@@ -665,5 +750,75 @@ mod tests {
         let r = run(&ctx(), &wt, &args).unwrap();
         assert_eq!(r.source, main);
         assert!(wt.join(".env").exists());
+    }
+
+    fn fake_installer() -> &'static Installer {
+        Box::leak(Box::new(Installer {
+            ecosystem: "node",
+            lockfile: "package-lock.json",
+            command: &["sh", "-c", "touch ran-marker"],
+            dep_dir: Some("node_modules"),
+            slow: false,
+        }))
+    }
+
+    #[test]
+    fn restored_lockfile_after_install_is_not_up_to_date() {
+        let (tmp, main) = repo(&[("package-lock.json", "A")]);
+        let wt = add_wt(&main, &tmp, "wt");
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
+        let p = PlannedInstall { installer: fake_installer(), dir: String::new() };
+        let mut rec = BTreeMap::new();
+        let mut go = |rec: &mut BTreeMap<String, String>| {
+            run_install(&ctx(), &main, &wt, &p, InstallFlags::default(), false, rec).status
+        };
+        assert_eq!(go(&mut rec), "up_to_date");
+        fs::write(wt.join("package-lock.json"), "B").unwrap();
+        assert_eq!(go(&mut rec), "ran");
+        assert_eq!(go(&mut rec), "up_to_date"); // deps now match B
+        fs::write(wt.join("package-lock.json"), "A").unwrap(); // equals main again, deps are from B
+        assert_eq!(go(&mut rec), "ran");
+        assert_eq!(go(&mut rec), "up_to_date");
+    }
+
+    #[test]
+    fn install_provenance_persists_and_preserves_state_fields() {
+        let (tmp, main) = repo(&[("package-lock.json", "A")]);
+        fs::create_dir_all(main.join("node_modules")).unwrap();
+        let wt = add_wt(&main, &tmp, "wt");
+        let state_path = git::git_dir(&wt).unwrap().join(STATE_FILE);
+        fs::write(&state_path, "{\"custom\": 7}").unwrap();
+        let flags = InstallFlags::default();
+        hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(v["custom"], 7);
+        assert!(v["installs"]["|package-lock.json"].is_string());
+    }
+
+    #[test]
+    fn ignored_claude_dir_skips_worktrees_but_keeps_config() {
+        let (tmp, main) = repo(&[]);
+        fs::write(main.join(".gitignore"), ".claude/\n").unwrap();
+        fs::create_dir_all(main.join(".claude/worktrees/old")).unwrap();
+        fs::write(main.join(".claude/worktrees/old/precious"), "x").unwrap();
+        fs::write(main.join(".claude/worktrees/old/.git"), "gitdir: /x").unwrap();
+        fs::create_dir_all(main.join(".claude/agents")).unwrap();
+        fs::write(main.join(".claude/agents/x.md"), "agent").unwrap();
+        fs::write(main.join(".claude/settings.local.json"), "{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("agents", main.join(".claude/link")).unwrap();
+        let wt = add_wt(&main, &tmp, "wt");
+        let flags = InstallFlags { no_install: true, no_slow: false };
+        let r = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert!(!wt.join(".claude/worktrees").exists());
+        assert_eq!(fs::read_to_string(wt.join(".claude/agents/x.md")).unwrap(), "agent");
+        assert!(wt.join(".claude/settings.local.json").exists());
+        assert_eq!(action(&r, ".claude/worktrees/"), "skipped");
+        assert!(r.entries.iter().all(|e| e.path != ".claude/"));
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(wt.join(".claude/link")).unwrap().file_type().is_symlink());
+        // Second run is idempotent.
+        let r2 = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert_eq!(action(&r2, ".claude/settings.local.json"), "exists");
     }
 }
