@@ -22,6 +22,8 @@ pub struct WorktreeStatus {
     pub prunable: bool,
     /// Changed or untracked (non-ignored) paths. 0 means clean.
     pub dirty: usize,
+    /// The worktree has an initialized submodule; cmw does not inspect their unpushed commits.
+    pub has_submodules: bool,
     pub upstream: Option<String>,
     pub ahead: Option<u32>,
     pub behind: Option<u32>,
@@ -187,20 +189,29 @@ fn detect_merge(
             (Some(false), None, "no_commits".into())
         };
     }
-    if let Some(r) = refs.first()
-        && let Ok(out) = git::run(&wt.path, &["cherry", r, "HEAD"]) {
-            let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
-            if !lines.is_empty() && lines.iter().all(|l| l.starts_with('-')) {
-                return (Some(true), Some("patch_id"), format!("every commit has an equivalent patch in {r}"));
+    // `git cherry` skips merge commits, so patch-id proof only holds for a branch without any.
+    let mut cherry_reason = None;
+    if let Some(r) = refs.first() {
+        match git::run(&wt.path, &["rev-list", "--merges", &format!("{r}..HEAD")]) {
+            Ok(m) if m.trim().is_empty() => {
+                if let Ok(out) = git::run(&wt.path, &["cherry", r, "HEAD"]) {
+                    let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+                    if !lines.is_empty() && lines.iter().all(|l| l.starts_with('-')) {
+                        return (Some(true), Some("patch_id"), format!("every commit has an equivalent patch in {r}"));
+                    }
+                }
             }
+            Ok(_) => cherry_reason = Some("has_merge_commits".to_string()),
+            Err(_) => cherry_reason = Some("could not list merge commits".to_string()),
         }
+    }
     if opts.use_gh
         && let Some(head) = wt.head.as_deref()
             && gh.has_merged_pr(ctx, repo_cwd, branch, head) {
                 return (Some(true), Some("gh"), "a merged GitHub PR has this branch at HEAD".into());
             }
     let target = refs.first().map(String::as_str).unwrap_or(default_branch);
-    (Some(false), None, format!("not merged into {target}"))
+    (Some(false), None, cherry_reason.unwrap_or_else(|| format!("not merged into {target}")))
 }
 
 fn unpushed_count(wt: &Path, default_branch: &str) -> Result<u32> {
@@ -225,6 +236,7 @@ pub fn status(ctx: &Ctx, repo_cwd: &Path, wt: &Worktree, default_branch: &str, o
         locked: wt.locked,
         prunable: wt.prunable,
         dirty: 0,
+        has_submodules: false,
         upstream: None,
         ahead: None,
         behind: None,
@@ -242,14 +254,30 @@ pub fn status(ctx: &Ctx, repo_cwd: &Path, wt: &Worktree, default_branch: &str, o
         st.merge_reason = "bare repository".into();
         return st;
     }
-    if !wt.path.is_dir() || wt.prunable {
+    if !wt.path.is_dir() {
         st.merge_reason = "directory missing".into();
+        return st;
+    }
+    if wt.prunable {
+        // The directory exists but git cannot use it (e.g. its `.git` file is gone), so nothing
+        // below could be trusted: git commands would see no changes or even an enclosing repo.
+        st.merge_reason = "worktree link is broken".into();
+        st.error = Some(format!(
+            "worktree link is broken (.git file missing or invalid); cmw cannot verify uncommitted work. Repair it with `git worktree repair {}`",
+            wt.path.display()
+        ));
         return st;
     }
 
     match git::dirty_count(&wt.path) {
         Ok(n) => st.dirty = n,
         Err(e) => st.error = Some(e.message),
+    }
+    match git::has_initialized_submodules(&wt.path) {
+        Ok(b) => st.has_submodules = b,
+        Err(e) => {
+            st.error.get_or_insert(e.message);
+        }
     }
     st.hydrated = git::git_dir(&wt.path).map(|gd| gd.join(paths::STATE_FILE).exists()).unwrap_or(false);
     (st.last_commit_unix, st.idle_days) = activity(&wt.path);
@@ -580,5 +608,57 @@ mod tests {
         assert_eq!(r.repos[0].worktrees.len(), 3); // main + 2
         assert!(r.repos[0].worktrees.iter().all(|w| w.apparent_bytes.is_some()));
         assert!(r.human().contains("BRANCH"));
+    }
+
+    #[test]
+    fn existing_but_prunable_worktree_reports_error() {
+        let (_t, repo) = repo();
+        let wt = add_worktree(&repo, "broken");
+        std::fs::write(wt.join("precious"), "x").unwrap();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+        let st = st_of(&repo, &wt);
+        assert!(st.prunable);
+        let e = st.error.expect("must not look clean");
+        assert!(e.contains("worktree link is broken"), "{e}");
+    }
+
+    #[test]
+    fn merge_commit_content_defeats_patch_id_proof() {
+        let (_t, repo) = repo();
+        let wt = add_worktree(&repo, "mc");
+        commit_file(&wt, "a.txt");
+        git(&wt, &["branch", "side", "main"]);
+        git(&wt, &["switch", "-q", "side"]);
+        commit_file(&wt, "s.txt");
+        git(&wt, &["switch", "-q", "mc"]);
+        git(&wt, &["merge", "--no-ff", "--no-commit", "side"]);
+        std::fs::write(wt.join("evil.txt"), "unique").unwrap();
+        git(&wt, &["add", "evil.txt"]);
+        git(&wt, &["commit", "-q", "-m", "merge side"]);
+        git(&repo, &["cherry-pick", "mc^1"]); // a.txt
+        git(&repo, &["cherry-pick", "side"]);
+        let st = st_of(&repo, &wt);
+        assert_eq!(st.merged, Some(false));
+        assert_eq!(st.merge_reason, "has_merge_commits");
+    }
+
+    #[test]
+    fn dirty_submodule_is_seen_despite_ignore_config() {
+        let (t, repo) = repo();
+        let sub = t.path().join("subsrc");
+        std::fs::create_dir(&sub).unwrap();
+        git(&sub, &["init", "-q", "-b", "main"]);
+        git(&sub, &["config", "user.email", "t@example.com"]);
+        git(&sub, &["config", "user.name", "T"]);
+        commit_file(&sub, "f");
+        git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "libs/sub"]);
+        git(&repo, &["commit", "-q", "-m", "add sub"]);
+        let wt = add_worktree(&repo, "smod");
+        git(&wt, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+        git(&wt, &["config", "diff.ignoreSubmodules", "all"]);
+        std::fs::write(wt.join("libs/sub/precious"), "x").unwrap();
+        let st = st_of(&repo, &wt);
+        assert!(st.has_submodules);
+        assert!(st.dirty >= 1, "dirty submodule hidden: {}", st.dirty);
     }
 }

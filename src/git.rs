@@ -208,7 +208,21 @@ pub fn ignored_entries(root: &Path) -> Result<Vec<String>> {
 
 /// Number of changed or untracked (non-ignored) paths. 0 means clean.
 pub fn dirty_count(worktree: &Path) -> Result<usize> {
-    let raw = run_raw(worktree, &["status", "--porcelain=v1", "-z", "--untracked-files=normal"])?;
+    // Pin submodule handling: user config (`diff.ignoreSubmodules=all`, ...) must not hide dirty submodules.
+    let raw = run_raw(
+        worktree,
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "-c",
+            "submodule.recurse=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+        ],
+    )?;
     // Renames emit two NUL-separated paths; count only entries that start with a status code.
     let text = String::from_utf8_lossy(&raw);
     let mut count = 0;
@@ -224,6 +238,12 @@ pub fn dirty_count(worktree: &Path) -> Result<usize> {
         count += 1;
     }
     Ok(count)
+}
+
+/// True when the worktree has any initialized submodule (recursively). Their unpushed commits are not checked.
+pub fn has_initialized_submodules(worktree: &Path) -> Result<bool> {
+    let out = run(worktree, &["submodule", "status", "--recursive"])?;
+    Ok(out.lines().any(|l| !l.is_empty() && !l.starts_with('-')))
 }
 
 /// Filesystem-safe name for a branch: `feat/Login UI` -> `feat-login-ui`.

@@ -218,27 +218,50 @@ struct Removal {
     watchman: bool,
     branch_deleted: bool,
     branch_kept_reason: Option<String>,
+    /// "removed" | "deferred" (registration left for `git worktree prune`) | "not_needed" (dry run).
+    admin_cleanup: &'static str,
 }
 
 fn watchman_available() -> bool {
     paths::find_in_path("watchman").is_some()
 }
 
-/// Remove the git admin dir of a worktree whose directory is already gone. Prefer deleting exactly
-/// this worktree's admin dir over `git worktree prune`, which would also drop unrelated entries
-/// (e.g. worktrees on an unmounted drive).
-fn drop_admin_dir(repo_cwd: &Path, admin: Option<PathBuf>) {
-    let common = git::common_dir(repo_cwd).ok().map(|c| canonical(&c));
-    let done = match (admin, common) {
-        (Some(a), Some(c)) => {
-            let a = canonical(&a);
-            a.parent() == Some(c.join("worktrees").as_path()) && !a.join("locked").exists() && std::fs::remove_dir_all(&a).is_ok()
-        }
-        _ => false,
+/// The `.git/worktrees/<name>` admin dir that belongs to exactly this worktree path, or None when it
+/// cannot be proven. Existing worktree: follow its `.git` file. Missing directory: find the admin dir
+/// whose `gitdir` file points at `<path>/.git`. Either way the admin dir's `gitdir` must point back.
+fn resolve_admin(repo_cwd: &Path, wt_path: &Path) -> Option<PathBuf> {
+    let common = canonical(&git::common_dir(repo_cwd).ok()?);
+    let worktrees = common.join("worktrees");
+    let target = canonical(wt_path).join(".git");
+    let points_back = |admin: &Path| {
+        std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|t| {
+            let g = PathBuf::from(t.trim());
+            g == target || canonical(&g) == target || g == wt_path.join(".git")
+        })
     };
-    if !done {
-        let _ = git::run(repo_cwd, &["worktree", "prune"]);
+    let candidate = if wt_path.is_dir() {
+        let text = std::fs::read_to_string(wt_path.join(".git")).ok()?;
+        let g = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        Some(if g.is_absolute() { g } else { wt_path.join(g) })
+    } else {
+        std::fs::read_dir(&worktrees).ok()?.flatten().map(|e| e.path()).find(|p| points_back(p))
+    }?;
+    let admin = canonical(&candidate);
+    (admin.parent() == Some(worktrees.as_path()) && points_back(&admin) && !admin.join("locked").exists()).then_some(admin)
+}
+
+/// Delete exactly one resolved admin dir. Never runs a repo-wide `git worktree prune`.
+fn drop_admin_dir(ctx: &Ctx, admin: Option<PathBuf>, wt_path: &Path) -> &'static str {
+    if let Some(a) = admin
+        && std::fs::remove_dir_all(&a).is_ok()
+    {
+        return "removed";
     }
+    ctx.warn(format!(
+        "could not identify the git registration of {}; it stays registered and `git worktree prune` will clean it up",
+        wt_path.display()
+    ));
+    "deferred"
 }
 
 fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntry], trash: &Path, o: &RemoveOpts) -> Result<Removal> {
@@ -258,6 +281,7 @@ fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntr
             watchman: exists && watchman_available(),
             branch_deleted: delete_branch,
             branch_kept_reason: kept,
+            admin_cleanup: "not_needed",
         });
     }
 
@@ -281,13 +305,15 @@ fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntr
             .unwrap_or(false);
     }
     // (c) the directory and its git registration
+    // Resolve the admin dir BEFORE moving the directory; delete only that one afterwards.
+    let admin = resolve_admin(repo_cwd, &st.path);
+    let admin_cleanup;
     if exists {
-        let admin = git::git_dir(&st.path).ok();
         let evicted = evict(&st.path, trash)?;
-        drop_admin_dir(repo_cwd, admin);
+        admin_cleanup = drop_admin_dir(ctx, admin, &st.path);
         finish_evict(evicted, o.sync)?;
     } else {
-        let _ = git::run(repo_cwd, &["worktree", "prune"]);
+        admin_cleanup = drop_admin_dir(ctx, admin, &st.path);
     }
     // (d) branch
     let mut branch_deleted = false;
@@ -302,7 +328,7 @@ fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntr
             }
         }
     }
-    Ok(Removal { derived_data, watchman, branch_deleted, branch_kept_reason })
+    Ok(Removal { derived_data, watchman, branch_deleted, branch_kept_reason, admin_cleanup })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -320,6 +346,8 @@ pub struct RmReport {
     pub branch_kept_reason: Option<String>,
     pub derived_data_removed: Vec<PathBuf>,
     pub watchman_unwatched: bool,
+    /// "removed" | "deferred" | "not_needed".
+    pub admin_cleanup: String,
 }
 
 impl Report for RmReport {
@@ -360,11 +388,23 @@ fn rm_impl(ctx: &Ctx, cwd: &Path, args: &RmArgs, env: &Env) -> Result<RmReport> 
     let force_hint = format!("cmw rm {} --force", sh_quote(&args.name));
 
     if !args.force {
+        if st.prunable && st.path.is_dir() {
+            return Err(CmwError::refused(
+                format!("{p}: worktree link is broken (.git file missing); cmw cannot verify uncommitted work. Repair it, or pass --force to remove it anyway"),
+                format!("git worktree repair {}", sh_quote(&p)),
+            ));
+        }
         if let Some(e) = &st.error {
             return Err(CmwError::refused(format!("could not inspect {p}: {e}"), force_hint));
         }
         if st.dirty > 0 {
             return Err(CmwError::refused(format!("{} uncommitted changes in {p}", st.dirty), force_hint));
+        }
+        if st.has_submodules {
+            return Err(CmwError::refused(
+                format!("{p}: worktree has initialized submodules; cmw cannot verify their unpushed commits. Pass --force to remove it anyway"),
+                force_hint,
+            ));
         }
         if st.unpushed > 0 && st.merged != Some(true) {
             let hint = match &st.branch {
@@ -389,6 +429,7 @@ fn rm_impl(ctx: &Ctx, cwd: &Path, args: &RmArgs, env: &Env) -> Result<RmReport> 
         branch_kept_reason: r.branch_kept_reason,
         derived_data_removed: r.derived_data,
         watchman_unwatched: r.watchman,
+        admin_cleanup: r.admin_cleanup.to_string(),
     })
 }
 
@@ -403,6 +444,7 @@ pub struct GcItem {
     pub branch: Option<String>,
     pub merged_via: Option<String>,
     pub branch_deleted: bool,
+    pub admin_cleanup: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -605,6 +647,11 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
 
     for wt in wts.iter().filter(|w| !w.is_main && !w.bare) {
         let skip = |reason: String| SkippedItem { repo: name.clone(), path: wt.path.clone(), branch: wt.branch.clone(), reason };
+        if wt.prunable && wt.path.is_dir() {
+            // Directory exists: git cannot use it, but it may hold real work. Never prune or remove.
+            report.skipped.push(skip(format!("worktree link is broken; cmw cannot verify uncommitted work (git worktree repair {})", wt.path.display())));
+            continue;
+        }
         if wt.prunable {
             if wt.locked {
                 report.skipped.push(skip("locked".into()));
@@ -616,7 +663,7 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
         }
         let st = inventory::status(ctx, &repo_dir, wt, &default, &opts, &mut gh);
         let merged = st.merged == Some(true);
-        if merged && !st.locked && st.dirty == 0 && st.error.is_none() {
+        if merged && !st.locked && st.dirty == 0 && st.error.is_none() && !st.has_submodules {
             if path_is_inside(cwd, &wt.path) {
                 report.skipped.push(skip("the current directory is inside this worktree".into()));
             } else {
@@ -629,6 +676,8 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
                 "locked".to_string()
             } else if let Some(e) = &st.error {
                 format!("could not inspect: {e}")
+            } else if st.has_submodules {
+                "worktree has initialized submodules; cmw cannot verify their unpushed commits".to_string()
             } else {
                 format!("{} uncommitted changes", st.dirty)
             };
@@ -637,7 +686,8 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
     }
 
     for st in candidates {
-        let item = |branch_deleted: bool| GcItem {
+        let item = |branch_deleted: bool, admin: &str| GcItem {
+            admin_cleanup: admin.to_string(),
             repo: name.clone(),
             path: st.path.clone(),
             branch: st.branch.clone(),
@@ -649,9 +699,9 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
             Ok(r) => {
                 report.derived_data.extend(r.derived_data);
                 if args.yes {
-                    report.removed.push(item(r.branch_deleted));
+                    report.removed.push(item(r.branch_deleted, r.admin_cleanup));
                 } else {
-                    report.would_remove.push(item(r.branch_deleted));
+                    report.would_remove.push(item(r.branch_deleted, r.admin_cleanup));
                 }
             }
             Err(e) => {
@@ -973,6 +1023,98 @@ mod tests {
         assert_eq!(r.pruned.len(), 1);
         assert!(wt.exists());
         assert_eq!(git::list_worktrees(&repo).unwrap().len(), 2);
+    }
+
+    fn break_link(wt: &Path) {
+        std::fs::write(wt.join("precious"), "x").unwrap();
+        std::fs::remove_file(wt.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn rm_refuses_existing_worktree_with_broken_link() {
+        let (t, repo) = repo();
+        let wt = add_worktree(&repo, "broken");
+        break_link(&wt);
+        let e = rm_impl(&ctx(), &repo, &rm_args("broken"), &env(t.path())).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Refused);
+        assert!(e.message.contains("--force"), "{}", e.message);
+        assert!(e.hint.unwrap().starts_with("git worktree repair"));
+        assert!(wt.join("precious").exists());
+    }
+
+    #[test]
+    fn gc_never_removes_or_prunes_existing_broken_worktree() {
+        let (t, repo) = repo();
+        let wt = add_worktree(&repo, "broken");
+        break_link(&wt);
+        let r = gc_impl(&ctx(), &repo, &gc_args(true), &env(t.path())).unwrap();
+        assert!(r.removed.is_empty() && r.pruned.is_empty());
+        assert_eq!(r.skipped.len(), 1);
+        assert!(wt.join("precious").exists());
+        assert_eq!(git::list_worktrees(&repo).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rm_never_prunes_unrelated_entries_when_admin_is_unresolved() {
+        let (t, repo) = repo();
+        let unmounted = add_worktree(&repo, "unmounted");
+        std::fs::remove_dir_all(&unmounted).unwrap();
+        let wt = add_worktree(&repo, "x");
+        break_link(&wt);
+        let r = rm_impl(&ctx(), &repo, &forced_for("x"), &env(t.path())).unwrap();
+        assert_eq!(r.admin_cleanup, "deferred");
+        assert!(!wt.exists());
+        let paths: Vec<_> = git::list_worktrees(&repo).unwrap().into_iter().map(|w| w.path).collect();
+        assert!(paths.contains(&unmounted), "unrelated registration was pruned");
+    }
+
+    #[test]
+    fn rm_removes_exactly_its_admin_dir() {
+        let (t, repo) = repo();
+        let other = add_worktree(&repo, "keep");
+        let wt = add_worktree(&repo, "gone");
+        let r = rm_impl(&ctx(), &repo, &rm_args("gone"), &env(t.path())).unwrap();
+        assert_eq!(r.admin_cleanup, "removed");
+        let wts = git::list_worktrees(&repo).unwrap();
+        assert_eq!(wts.len(), 2);
+        assert!(other.exists() && !wt.exists());
+    }
+
+    fn submodule_worktree(t: &Path, repo: &Path, name: &str) -> PathBuf {
+        let sub = t.join("subsrc");
+        std::fs::create_dir(&sub).unwrap();
+        git(&sub, &["init", "-q", "-b", "main"]);
+        git(&sub, &["config", "user.email", "t@example.com"]);
+        git(&sub, &["config", "user.name", "T"]);
+        commit_file(&sub, "f");
+        git(repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "libs/sub"]);
+        git(repo, &["commit", "-q", "-m", "add sub"]);
+        let wt = add_worktree(repo, name);
+        git(&wt, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+        wt
+    }
+
+    #[test]
+    fn rm_refuses_worktree_with_initialized_submodules() {
+        let (t, repo) = repo();
+        let wt = submodule_worktree(t.path(), &repo, "smod");
+        let e = rm_impl(&ctx(), &repo, &rm_args("smod"), &env(t.path())).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Refused);
+        assert!(e.message.contains("initialized submodules"), "{}", e.message);
+        assert_eq!(e.hint.as_deref(), Some("cmw rm smod --force"));
+        assert!(wt.exists());
+    }
+
+    #[test]
+    fn gc_skips_merged_worktree_with_initialized_submodules() {
+        let (t, repo) = repo();
+        let wt = submodule_worktree(t.path(), &repo, "smod");
+        commit_file(&wt, "a.txt");
+        git(&repo, &["merge", "--no-edit", "smod"]);
+        let r = gc_impl(&ctx(), &repo, &gc_args(true), &env(t.path())).unwrap();
+        assert!(r.removed.is_empty());
+        assert!(r.skipped.iter().any(|s| s.reason.contains("initialized submodules")), "{:?}", r.skipped);
+        assert!(wt.exists());
     }
 
     #[test]
