@@ -1,6 +1,6 @@
 [package]
 name = "cmw"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Fast, disk-cheap git worktrees for humans and AI agents: copy-on-write deps, .env that follows, safe cleanup, JSON output, no prompts."
 license = "MIT"
