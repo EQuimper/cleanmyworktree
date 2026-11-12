@@ -94,11 +94,18 @@ fn spawn(f: impl FnOnce() + Send + 'static) {
     std::thread::spawn(f);
 }
 
-/// Look for a newer release (cached for a day; silent on failure).
+/// Look for a newer release on every launch: the last known answer first so it shows instantly,
+/// then GitHub's. A failed check (offline) keeps the last known answer.
 pub fn check_update(tx: &Sender<Msg>) {
+    if crate::update::check_disabled() {
+        return;
+    }
     let tx = tx.clone();
     spawn(move || {
-        let _ = tx.send(Msg::UpdateAvailable(crate::update::available_quietly()));
+        let _ = tx.send(Msg::UpdateAvailable(crate::update::cached_newer()));
+        if let Ok(newer) = crate::update::fetch_newer() {
+            let _ = tx.send(Msg::UpdateAvailable(newer));
+        }
     });
 }
 

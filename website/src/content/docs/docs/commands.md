@@ -123,7 +123,7 @@ Upgrade cmw to the latest release through whatever installed it: `brew upgrade e
 | --- | --- |
 | `--check` | Only report the current and latest versions, the install method and the upgrade command. |
 
-The latest version is read from GitHub's `releases/latest` redirect. Only `cmw update` and the interactive screen check for updates; the interactive screen checks at most once a day. Other commands never touch the network.
+The latest version is read from GitHub's `releases/latest` redirect. Only `cmw update` and the interactive screen check for updates; the interactive screen checks in the background each time it opens. Other commands never touch the network.
 
 ## `cmw shell-init <shell>`
 

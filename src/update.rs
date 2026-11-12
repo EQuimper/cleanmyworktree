@@ -1,7 +1,8 @@
 //! `cmw update`: find the latest release and upgrade through whatever installed this binary.
 //!
 //! The latest version comes from the redirect of `github.com/<repo>/releases/latest` (system
-//! `curl`, no API token, no rate limit), cached for a day in `$CMW_HOME/update-check.json`.
+//! `curl`, no API token, no rate limit). The last answer is kept in `$CMW_HOME/update-check.json`
+//! so the TUI can show it instantly while it checks again in the background.
 //! Only `cmw update` and the TUI ever check; other commands stay offline.
 use crate::cli::UpdateArgs;
 use crate::output::{CmwError, Ctx, Report, Result, sh_quote};
@@ -10,12 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const RELEASES_LATEST: &str = "https://github.com/EQuimper/cleanmyworktree/releases/latest";
 const INSTALLER: &str =
     "https://github.com/EQuimper/cleanmyworktree/releases/latest/download/cmw-installer.sh";
-const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 /// How this binary was installed, which decides how to upgrade it.
@@ -230,9 +230,8 @@ fn cache_path() -> PathBuf {
     paths::cmw_home().join("update-check.json")
 }
 
-fn read_cache() -> Option<Cache> {
-    let c: Cache = serde_json::from_str(&std::fs::read_to_string(cache_path()).ok()?).ok()?;
-    (now().saturating_sub(c.checked_at) < CACHE_TTL.as_secs()).then_some(c)
+fn read_cache(path: &Path) -> Option<Cache> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 fn write_cache(latest: &Option<String>) {
@@ -252,25 +251,31 @@ fn write_cache(latest: &Option<String>) {
     }
 }
 
-/// Latest released version. `fresh` skips the one-day cache.
-pub fn latest(fresh: bool) -> Result<Option<String>> {
-    if !fresh && let Some(c) = read_cache() {
-        return Ok(c.latest);
-    }
+/// Latest released version, asked from GitHub now. The answer is remembered for `cached_newer`.
+pub fn latest() -> Result<Option<String>> {
     let latest = fetch_latest()?;
     write_cache(&latest);
     Ok(latest)
 }
 
-/// For the TUI: a newer version, if one is known. Quiet on any failure; honors CMW_NO_UPDATE_CHECK.
-pub fn available_quietly() -> Option<String> {
-    if std::env::var_os("CMW_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty() && v != "0") {
-        return None;
-    }
-    latest(false)
-        .ok()
-        .flatten()
-        .filter(|l| is_newer(l, CURRENT))
+/// `CMW_NO_UPDATE_CHECK` set: the TUI never looks for releases.
+pub fn check_disabled() -> bool {
+    std::env::var_os("CMW_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// A newer version from the last check, without touching the network. Any age is fine: a release
+/// that was newer than this binary then still is.
+pub fn cached_newer() -> Option<String> {
+    newer_in_cache(&cache_path())
+}
+
+fn newer_in_cache(path: &Path) -> Option<String> {
+    read_cache(path)?.latest.filter(|l| is_newer(l, CURRENT))
+}
+
+/// A newer version, asked from GitHub now. Err when the check fails (offline, timeout).
+pub fn fetch_newer() -> Result<Option<String>> {
+    Ok(latest()?.filter(|l| is_newer(l, CURRENT)))
 }
 
 #[derive(Debug, Serialize)]
@@ -309,7 +314,7 @@ impl Report for UpdateReport {
 
 pub fn run(ctx: &Ctx, args: &UpdateArgs) -> Result<UpdateReport> {
     let method = detect();
-    let latest = latest(true)?;
+    let latest = latest()?;
     let available = latest.as_deref().is_some_and(|l| is_newer(l, CURRENT));
     let mut report = UpdateReport {
         current: CURRENT.into(),
@@ -415,6 +420,17 @@ fn installed_version() -> Option<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_newer_release_shows_at_any_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("update-check.json");
+        assert_eq!(newer_in_cache(&path), None);
+        std::fs::write(&path, r#"{"checked_at":0,"latest":"99.0.0"}"#).unwrap();
+        assert_eq!(newer_in_cache(&path).as_deref(), Some("99.0.0"));
+        std::fs::write(&path, r#"{"checked_at":0,"latest":"0.0.1"}"#).unwrap();
+        assert_eq!(newer_in_cache(&path), None);
+    }
 
     #[test]
     fn versions_compare_numerically() {
