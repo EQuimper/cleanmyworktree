@@ -2,7 +2,7 @@
 base = "website"
 command = "npm run build"
 publish = "dist"
-ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ../Cargo.toml ../netlify.toml"
+ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ../Cargo.toml ../netlify.toml ../assets/agent/prompt.md"
 
 [build.environment]
 NODE_VERSION = "24"

@@ -1,7 +1,83 @@
 ---
 title: Use with agents
-description: Drive cmw from Claude Code, Codex, T3 Code or any agent with JSON output, stable exit codes and fix hints.
+description: Set up cmw in Claude Code, Codex, Grok and T3 Code with one prompt, then drive it with JSON output, stable exit codes and fix hints.
 ---
+
+import { Code } from '@astrojs/starlight/components';
+import { agentPrompt } from '../../../lib/release';
+
+## Set up with one prompt
+
+Copy this prompt and paste it into Claude Code, Codex, Grok or T3 Code. The agent installs cmw if it's missing, adds the cmw skill for every agent on your Mac, and wires cmw into the tool it's running in. It asks before changing Claude Code's settings.
+
+<Code code={agentPrompt} lang="md" title="Agent setup prompt" wrap />
+
+The CLI prints the same text:
+
+```sh
+cmw agents prompt --copy    # puts it on the clipboard
+```
+
+## Set up by hand
+
+```sh
+cmw agents install    # cmw skill for every agent found
+cmw agents            # what's installed
+```
+
+`cmw agents install` writes the skill wherever each agent looks for it:
+
+| Agent | Skill file |
+| --- | --- |
+| Claude Code | `~/.claude/skills/cmw/SKILL.md` |
+| Codex | `~/.agents/skills/cmw/SKILL.md` |
+| Grok | `~/.grok/skills/cmw/SKILL.md` (Grok also reads Claude Code's) |
+
+Pass `--agent claude`, `--agent codex` or `--agent grok` to pick targets. With no agents found, it writes `~/.agents/skills/cmw`, which many agents read. `cmw update` refreshes installed skills to match the new version, and leaves alone any skill you've edited.
+
+For `AGENTS.md` or `CLAUDE.md`:
+
+```sh
+cmw skill print --agents-md >> AGENTS.md
+```
+
+### T3 Code
+
+Make `cmw hydrate` the worktree setup script, so every new T3 worktree gets its dependencies and `.env` in seconds. In T3 Code, add a project script with the command `cmw hydrate` and set it to run when a worktree is created. Pasted into a T3 thread, the prompt above does this for every project.
+
+`cmw ls --all`, `cmw gc --all` and `cmw clean-artifacts --all` include `~/.t3/worktrees` automatically.
+
+### Codex app
+
+Open **Settings → Environments** and set the project's setup script to `cmw hydrate`. The Codex app runs it in each new worktree.
+
+### Claude Code worktrees
+
+Claude Code can create worktrees for its sessions (`claude --worktree`). Route them through cmw so they're hydrated and cleaned up safely:
+
+```sh
+cmw hook claude --install            # ~/.claude/settings.json
+cmw hook claude --install --project  # this repo's .claude/settings.json
+```
+
+This adds `WorktreeCreate` and `WorktreeRemove` hooks next to any you already have, and does nothing if they're there. `cmw hook claude` without `--install` prints them instead:
+
+```json
+{
+  "hooks": {
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "cmw hook claude-create" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "cmw hook claude-remove" }] }]
+  }
+}
+```
+
+The worktrees then live in `~/.cmw/worktrees`. Removal goes through `cmw rm` without `--force`, so a worktree with uncommitted or unpushed work is kept.
+
+### Other tools
+
+Any tool that creates worktrees with `git worktree add` works the same way: run `cmw hydrate` in the new worktree. Add its worktree folder to `CMW_SCAN_ROOTS` so `--all` finds it.
+
+## The contract
 
 cmw is designed so an agent can drive it without supervision.
 
@@ -18,6 +94,8 @@ cmw is designed so an agent can drive it without supervision.
 
 ## A typical loop
 
+An agent that's already in a worktree made by T3 Code, the Codex app or Claude Code works where it is and runs `cmw hydrate --json` if something is missing. To start isolated work itself:
+
 ```sh
 cmw new fix/flaky-test --json
 # data.path                     where to work
@@ -31,56 +109,3 @@ cmw rm fix/flaky-test --json
 ```
 
 When a command is refused, `error.hint` is the exact command that overrides it. An agent should show it to the person rather than run it, since it usually means `--force`.
-
-## Teach your agent about cmw
-
-### Claude Code skill
-
-```sh
-cmw skill install
-```
-
-Writes the cmw skill to `~/.claude/skills/cmw/SKILL.md`. Use `--dir <path>` to write it elsewhere, such as a project's `.claude/skills/cmw`.
-
-### AGENTS.md or CLAUDE.md
-
-```sh
-cmw skill print --agents-md >> AGENTS.md
-```
-
-`cmw skill print` without the flag prints the full skill.
-
-## Claude Code worktrees
-
-Claude Code can create worktrees for its sessions. Route them through cmw so they're hydrated and cleaned up safely:
-
-```sh
-cmw hook claude
-```
-
-This prints `settings.json` hooks for `WorktreeCreate` and `WorktreeRemove`. Merge them into `~/.claude/settings.json` or your project's `.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "cmw hook claude-create" }] }],
-    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "cmw hook claude-remove" }] }]
-  }
-}
-```
-
-Removal goes through `cmw rm` without `--force`, so a worktree with uncommitted or unpushed work is kept.
-
-## T3 Code
-
-Set the project's worktree setup script to:
-
-```sh
-cmw hydrate
-```
-
-`cmw ls --all`, `cmw gc --all` and `cmw clean-artifacts --all` include `~/.t3/worktrees` automatically.
-
-## Other tools
-
-Any tool that creates worktrees with `git worktree add` works the same way: run `cmw hydrate` in the new worktree. Add its worktree folder to `CMW_SCAN_ROOTS` so `--all` finds it.

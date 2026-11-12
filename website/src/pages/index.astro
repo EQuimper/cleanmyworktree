@@ -4,7 +4,7 @@ import '@fontsource-variable/martian-mono/index.css';
 import '../styles/shared.css';
 import '../styles/site.css';
 import Duel from '../components/Duel.astro';
-import { brewInstall, repo, version } from '../lib/release';
+import { agentPrompt, brewInstall, repo, version } from '../lib/release';
 
 const title = 'cmw: fast, disk-cheap git worktrees for humans and AI agents';
 const description =
@@ -98,6 +98,7 @@ const contract = [
           <code>{brewInstall}</code>
           <button type="button" data-copy={brewInstall}>Copy</button>
         </div>
+        <button type="button" class="prompt-copy" data-copy={agentPrompt}>Copy agent prompt</button>
         <a class="docs-link" href="/docs/">Read the docs</a>
       </div>
 
@@ -211,7 +212,7 @@ const contract = [
 
       <section class="stop agents" aria-labelledby="agents-title">
         <h2 id="agents-title" class="node" data-reveal>Built for agents</h2>
-        <p class="body">Claude Code, Codex and T3 Code can create, use and remove worktrees with cmw without asking you anything.</p>
+        <p class="body">Claude Code, Codex, Grok and T3 Code can create, use and remove worktrees with cmw without asking you anything.</p>
         <div class="split">
           <dl>
             {
@@ -232,9 +233,16 @@ const contract = [
               <span class="line">    "hydrate": {'{'} "ready": <span class="ok">true</span>, "needs_setup": [] {'}'}</span>
               <span class="line">  {'}'}, "warnings": [] {'}'}</span>
             </div>
-            <p class="teach">
-              <code>cmw skill install</code> adds a Claude Code skill. <code>cmw hook claude</code> routes Claude Code’s own worktrees through cmw.
-            </p>
+            <div class="teach">
+              <p>
+                Paste the prompt into your agent. It installs cmw and the cmw skill, and in T3 Code it runs <code>cmw hydrate</code> on every new worktree.
+              </p>
+              <button type="button" class="prompt-copy" data-copy={agentPrompt}>Copy agent prompt</button>
+              <details>
+                <summary>Read the prompt</summary>
+                <pre>{agentPrompt}</pre>
+              </details>
+            </div>
           </div>
         </div>
         <a class="more" href="/docs/agents/">Use cmw with agents</a>
@@ -247,6 +255,7 @@ const contract = [
         <code>{brewInstall}</code>
         <button type="button" data-copy={brewInstall}>Copy</button>
       </div>
+      <button type="button" class="prompt-copy" data-copy={agentPrompt}>Copy agent prompt</button>
       <p>Version {version} for macOS on Apple silicon and Intel. Free and open source under the MIT License.</p>
       <nav aria-label="Footer">
         <a href="/docs/">Docs</a>

@@ -292,6 +292,27 @@ h1 {
   outline-color: var(--mint);
 }
 
+/* Secondary action next to a .command: same height, outlined in the surrounding text color. */
+.prompt-copy {
+  padding: 0.6rem 1rem;
+  border: 2px solid currentColor;
+  border-radius: 0.6rem;
+  background: transparent;
+  font-size: 0.95rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.get .prompt-copy {
+  align-self: stretch;
+}
+
+.prompt-copy:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
 .docs-link {
   font-weight: 700;
   text-decoration-thickness: 2px;
@@ -870,13 +891,49 @@ h1 {
 }
 
 .teach {
-  margin-top: 1rem;
+  display: grid;
+  justify-items: start;
+  gap: 0.9rem;
+  margin-top: 1.25rem;
   color: #c3cbc7;
   font-size: 0.95rem;
 }
 
 .teach code {
   color: var(--paper);
+}
+
+.teach .prompt-copy {
+  color: var(--mint);
+}
+
+.teach .prompt-copy:hover {
+  background: var(--mint);
+  border-color: var(--mint);
+  color: var(--ink);
+}
+
+.teach details {
+  width: 100%;
+}
+
+.teach summary {
+  cursor: pointer;
+  color: var(--paper);
+  font-weight: 700;
+}
+
+.teach pre {
+  max-height: 22rem;
+  overflow: auto;
+  margin-top: 0.75rem;
+  padding: 1rem;
+  border-radius: 0.6rem;
+  box-shadow: 0 0 0 1px var(--graphite-line);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .agents .more {
@@ -962,12 +1019,14 @@ h1 {
 
 /* Motion. Everything here is either feedback or a one-time reveal. */
 
+.prompt-copy,
 .command button {
   transition:
     background-color 150ms ease,
     transform 120ms var(--ease-out);
 }
 
+.prompt-copy:active,
 .command button:active {
   transform: scale(0.97);
 }

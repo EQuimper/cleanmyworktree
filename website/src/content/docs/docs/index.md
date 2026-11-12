@@ -60,4 +60,4 @@ Worktrees made by T3 Code, Claude Code or plain `git worktree add` work too. Run
 ## Next
 
 - [How hydrate works](/docs/hydrate/) explains what gets cloned, copied, rebuilt or skipped.
-- [Use with agents](/docs/agents/) covers `--json`, exit codes and the Claude Code skill.
+- [Use with agents](/docs/agents/) covers the one-prompt setup for Claude Code, Codex, Grok and T3 Code, plus `--json` and exit codes.

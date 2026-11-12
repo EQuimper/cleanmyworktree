@@ -1,4 +1,6 @@
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+  const label = button.textContent;
+  let reset: ReturnType<typeof setTimeout> | undefined;
   button.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(button.dataset.copy ?? '');
@@ -6,7 +8,8 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')
     } catch {
       button.textContent = 'Press ⌘C';
     }
-    setTimeout(() => (button.textContent = 'Copy'), 1600);
+    clearTimeout(reset);
+    reset = setTimeout(() => (button.textContent = label), 1600);
   });
 }
 

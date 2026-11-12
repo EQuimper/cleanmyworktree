@@ -129,9 +129,27 @@ The latest version is read from GitHub's `releases/latest` redirect. Only `cmw u
 
 Print the shell function that adds `cmw cd`, and lets **Open** in the interactive screen change your directory. `<shell>` is `zsh`, `bash` or `fish`.
 
+## `cmw agents`
+
+Show which agents are set up: the cmw skill for Claude Code, Codex and Grok (`installed`, `outdated` or `missing`), Claude Code's worktree hooks, and T3 Code. [Guide](/docs/agents/)
+
+## `cmw agents install`
+
+Write the cmw skill for every agent found: `~/.claude/skills/cmw`, `~/.agents/skills/cmw` (Codex) and `~/.grok/skills/cmw`.
+
+| Flag | Effect |
+| --- | --- |
+| `--agent <claude\|codex\|grok>` | Install for these agents only, even if they aren't found. Repeatable. |
+| `--claude-hooks` | Also add the Claude Code worktree hooks to `~/.claude/settings.json`. |
+| `--refresh` | Only update cmw skill files that already exist. `cmw update` runs this. |
+
+## `cmw agents prompt`
+
+Print the agent setup prompt. `--copy` puts it on the clipboard instead. Paste it into Claude Code, Codex, Grok or T3 Code.
+
 ## `cmw skill install`
 
-Write the cmw skill to `~/.claude/skills/cmw/SKILL.md`. `--dir <path>` writes it elsewhere.
+Same as `cmw agents install`. `--dir <path>` writes the skill to one folder instead, such as a project's `.claude/skills/cmw`.
 
 ## `cmw skill print`
 
@@ -139,7 +157,7 @@ Print the skill. `--agents-md` prints a snippet for `AGENTS.md` or `CLAUDE.md` i
 
 ## `cmw hook claude`
 
-Print Claude Code `settings.json` hooks that create and remove worktrees through cmw. [Guide](/docs/agents/#claude-code-worktrees)
+Print Claude Code `settings.json` hooks that create and remove worktrees through cmw. `--install` adds them to `~/.claude/settings.json`, keeping your other hooks; add `--project` to use the repo's `.claude/settings.json` instead. [Guide](/docs/agents/#claude-code-worktrees)
 
 ## Environment variables
 
