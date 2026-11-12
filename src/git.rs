@@ -180,10 +180,10 @@ pub fn resolve_worktree(cwd: &Path, query: &str) -> Result<Worktree> {
 
 /// Default branch name (e.g. `main`), from origin/HEAD, else main/master, else the main checkout's branch.
 pub fn default_branch(cwd: &Path) -> Result<String> {
-    if let Ok(r) = run(cwd, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]) {
-        if let Some(b) = r.strip_prefix("origin/") {
-            return Ok(b.to_string());
-        }
+    if let Ok(r) = run(cwd, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        && let Some(b) = r.strip_prefix("origin/")
+    {
+        return Ok(b.to_string());
     }
     for b in ["main", "master"] {
         if run_ok(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")]) {

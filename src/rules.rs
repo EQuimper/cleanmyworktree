@@ -154,6 +154,7 @@ impl RuleSet {
         Ok(Self { rules })
     }
 
+    #[cfg(test)]
     pub fn builtin_only() -> Self {
         Self::new(Vec::new()).expect("built-in patterns are valid")
     }
@@ -167,10 +168,6 @@ impl RuleSet {
             .iter()
             .find(|(r, m)| r.dir.is_none_or(|d| d == is_dir) && m.is_match(path))
             .map(|(r, _)| r)
-    }
-
-    pub fn all(&self) -> impl Iterator<Item = &Rule> {
-        self.rules.iter().map(|(r, _)| r)
     }
 }
 
