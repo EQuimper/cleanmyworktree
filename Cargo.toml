@@ -1,0 +1,31 @@
+[package]
+name = "cmw"
+version = "0.1.0"
+edition = "2024"
+description = "Fast, disk-cheap git worktrees for humans and AI agents: copy-on-write deps, .env that follows, safe cleanup, JSON output, no prompts."
+license = "MIT"
+repository = "https://github.com/EQuimper/cleanmyworktree"
+homepage = "https://github.com/EQuimper/cleanmyworktree"
+readme = "README.md"
+keywords = ["git", "worktree", "agents", "cli", "disk"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+globset = "0.4.21"
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = "1.2.1"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
