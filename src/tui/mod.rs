@@ -71,29 +71,26 @@ pub fn run(cwd: PathBuf) -> i32 {
         eprintln!("error: {e}");
         return 1;
     }
-    if app.restart {
-        return restart(&app.cwd, app.cd_on_exit);
+    if let Some(exe) = app.restart {
+        return restart(&exe, &app.cwd, app.cd_on_exit);
     }
     hand_off_directory(app.cd_on_exit);
     0
 }
 
-/// After an update: replace this process with the newly installed cmw, back in the TUI.
-fn restart(cwd: &Path, cd: Option<PathBuf>) -> i32 {
+/// After an update: replace this process with the newly installed (and verified) cmw.
+fn restart(exe: &Path, cwd: &Path, cd: Option<PathBuf>) -> i32 {
     use std::os::unix::process::CommandExt;
     // Keep a pending `cd` (e.g. away from a removed worktree) for the shell wrapper.
     if cd.is_some() && std::env::var_os("CMW_CD_FILE").is_some() {
         hand_off_directory(cd);
     }
-    let exe = crate::paths::find_in_path("cmw")
-        .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| PathBuf::from("cmw"));
-    let err = std::process::Command::new(&exe).arg("-C").arg(cwd).exec();
+    let err = std::process::Command::new(exe).arg("-C").arg(cwd).exec();
     eprintln!(
-        "cmw was updated. Run `cmw` again ({}: {err}).",
+        "error: cmw was updated but could not restart ({}: {err}); run `cmw` again",
         exe.display()
     );
-    0
+    1
 }
 
 /// Tell the caller's shell where to go. The `shell-init` wrapper passes `$CMW_CD_FILE`; without it

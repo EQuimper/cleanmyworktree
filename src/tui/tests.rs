@@ -377,10 +377,12 @@ fn a_finished_update_restarts_the_tui() {
             command: Some("brew upgrade equimper/tap/cmw".into()),
             updated: true,
             installed: Some("0.2.0".into()),
+            installed_path: Some(PathBuf::from("/opt/homebrew/bin/cmw")),
         }),
         warnings: vec![],
     }));
-    assert!(app.quit && app.restart);
+    assert!(app.quit);
+    assert_eq!(app.restart, Some(PathBuf::from("/opt/homebrew/bin/cmw")));
 }
 
 #[test]
@@ -441,4 +443,49 @@ fn modal_buttons_are_clickable_and_cover_the_page() {
     click(&mut app, "Esc Cancel");
     assert!(app.modal.is_none());
     assert!(app.busy.is_none());
+}
+
+#[test]
+fn wheel_keeps_the_filter_open_so_typing_stays_text() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('/'));
+    typed(&mut app, "feat");
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(app.filtering);
+    assert_eq!(app.wt_sel, 1);
+    // `d` is part of the filter text, not Remove.
+    key(&mut app, KeyCode::Char('d'));
+    assert!(app.modal.is_none());
+    assert_eq!(app.filter, "featd");
+}
+
+#[test]
+fn confirm_button_hits_match_the_drawn_footer_at_narrow_widths() {
+    // A narrow terminal makes the Clean dialog's long sentence wrap at word boundaries.
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('d'));
+    let mut term = Terminal::new(TestBackend::new(46, 20)).unwrap();
+    let theme = Theme::new(Mode::Dark, true, false);
+    term.draw(|f| ui::render(f, &app, &theme)).unwrap();
+    let buf = term.backend().buffer().clone();
+    for (rect, hit) in app.hits.borrow().iter() {
+        if let super::app::Hit::Key(_) = hit {
+            let drawn: String = (rect.x..rect.x + rect.width)
+                .map(|x| buf[(x, rect.y)].symbol().to_string())
+                .collect();
+            assert!(
+                drawn.starts_with("Enter") || drawn.starts_with("Esc"),
+                "hit {hit:?} over {drawn:?}"
+            );
+        }
+    }
 }

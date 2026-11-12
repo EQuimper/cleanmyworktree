@@ -983,18 +983,10 @@ fn boxed<'a>(title: Line<'a>, border: Style) -> Block<'a> {
         .padding(ratatui::widgets::Padding::new(2, 2, 1, 0))
 }
 
-fn wrapped_height(lines: &[Line], width: u16) -> u16 {
-    let w = width.max(1) as usize;
-    lines
-        .iter()
-        .map(|l| (l.width().max(1)).div_ceil(w) as u16)
-        .sum()
-}
-
 fn modal(f: &mut Frame, area: Rect, app: &App, m: &Modal, t: &Theme) {
     let width = area.width.saturating_sub(6).min(76);
     let inner_w = width.saturating_sub(6);
-    let (title, border, mut body, keys): (Line, Style, Vec<Line>, Vec<(&str, &str)>) = match m {
+    let (title, border, body, keys): (Line, Style, Vec<Line>, Vec<(&str, &str)>) = match m {
         Modal::Confirm {
             title,
             lines,
@@ -1104,23 +1096,26 @@ fn modal(f: &mut Frame, area: Rect, app: &App, m: &Modal, t: &Theme) {
             )
         }
     };
-    body.push(Line::default());
-    body.push(footer(&keys, t));
+    // The footer gets its own row at the bottom of the box: it is always drawn where its click
+    // targets are, however the body wraps or gets clipped.
+    let text = Paragraph::new(Text::from(body)).wrap(Wrap { trim: false });
+    let body_h = text.line_count(inner_w) as u16;
     let max_h = area.height.saturating_sub(4);
-    let content_h = wrapped_height(&body, inner_w);
-    let height = (content_h + 3).min(max_h);
-    let rect = center(area, width, height);
-    // Inside the border (1) and padding (2 left, 1 top), the footer is the last content row.
-    if content_h + 3 <= max_h {
-        footer_hits(app, &keys, rect.x + 3, rect.y + 2 + content_h - 1);
-    }
+    // Border (2) + top padding (1) + blank row and footer (2).
+    let rect = center(area, width, (body_h + 5).min(max_h));
+    let block = boxed(title, border);
+    let inner = block.inner(rect);
+    let [body_area, _, foot] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
     f.render_widget(Clear, rect);
-    f.render_widget(
-        Paragraph::new(Text::from(body))
-            .wrap(Wrap { trim: false })
-            .block(boxed(title, border)),
-        rect,
-    );
+    f.render_widget(block, rect);
+    f.render_widget(text, body_area);
+    f.render_widget(Paragraph::new(footer(&keys, t)), foot);
+    footer_hits(app, &keys, foot.x, foot.y);
 }
 
 fn busy(f: &mut Frame, area: Rect, app: &App, t: &Theme) {

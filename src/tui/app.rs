@@ -212,8 +212,8 @@ pub struct App {
     pub shell_wrapper: bool,
     /// A newer release, once the background check finds one.
     pub update: Option<String>,
-    /// Re-launch cmw after quitting (set after a successful update).
-    pub restart: bool,
+    /// Re-launch this (verified, updated) cmw after quitting.
+    pub restart: Option<PathBuf>,
     /// Clickable areas of the last frame, topmost last.
     pub hits: RefCell<Vec<(Rect, Hit)>>,
     ctrl_c_armed: bool,
@@ -280,7 +280,7 @@ impl App {
             quit: false,
             shell_wrapper: std::env::var_os("CMW_CD_FILE").is_some(),
             update: None,
-            restart: false,
+            restart: None,
             hits: RefCell::new(Vec::new()),
             ctrl_c_armed: false,
             tx,
@@ -522,7 +522,7 @@ impl App {
             }
             Done::Update { res, warnings } => match res {
                 Ok(r) if r.updated => {
-                    self.restart = true;
+                    self.restart = r.installed_path.clone();
                     self.quit = true;
                 }
                 Ok(r) => {
@@ -694,11 +694,7 @@ impl App {
             None => {
                 self.modal = Some(Modal::Result {
                     title: format!("cmw {latest} is available"),
-                    text: format!(
-                        "This cmw ({}) was built from source, so it can't update itself.\n\nfix: {}",
-                        crate::update::CURRENT,
-                        method.manual_hint()
-                    ),
+                    text: format!("{}.\n\nfix: {}", method.refusal(), method.manual_hint()),
                     tone: Tone::Warn,
                     open: None,
                     scroll: 0,
@@ -720,13 +716,17 @@ impl App {
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = m.kind == MouseEventKind::ScrollUp;
-                let typing_form = self.screen == Screen::New && self.modal.is_none();
-                let other_modal = matches!(
-                    self.modal,
-                    Some(Modal::Confirm { .. } | Modal::TypeToConfirm { .. })
-                );
-                if !typing_form && !other_modal {
-                    press(self, if up { KeyCode::Up } else { KeyCode::Down });
+                let code = if up { KeyCode::Up } else { KeyCode::Down };
+                let key = KeyEvent::new(code, KeyModifiers::NONE);
+                match &self.modal {
+                    Some(Modal::Result { .. }) => press(self, code),
+                    Some(_) => {}
+                    // Typing owns the keyboard: scroll the list without leaving the filter.
+                    None if self.screen == Screen::Worktrees && self.filtering => {
+                        self.on_worktrees_key(key)
+                    }
+                    None if self.screen == Screen::New => {}
+                    None => press(self, code),
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {

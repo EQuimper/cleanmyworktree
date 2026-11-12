@@ -22,14 +22,16 @@ pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Method {
     Homebrew,
-    /// dist's shell installer (leaves a receipt in `~/.config/cmw`).
+    /// dist's shell installer (its receipt in `~/.config/cmw` claims this binary).
     Installer,
     /// `cargo install cmw` from crates.io.
     Cargo,
-    /// Built from a checkout (`cargo install --path`), or unknown.
+    /// Built from a checkout (`cargo install --path`).
     Source {
         path: Option<String>,
     },
+    /// Nothing claims this binary, or more than one installer does.
+    Unknown,
 }
 
 impl Method {
@@ -39,18 +41,42 @@ impl Method {
             Method::Installer => "installer",
             Method::Cargo => "cargo",
             Method::Source { .. } => "source",
+            Method::Unknown => "unknown",
         }
     }
 
-    /// The upgrade command, or None when cmw can't upgrade itself.
+    /// The upgrade command as shown to people, or None when cmw can't upgrade itself.
     pub fn command(&self) -> Option<String> {
         match self {
             Method::Homebrew => Some("brew upgrade equimper/tap/cmw".into()),
+            // Download fully, then run: `curl | sh` would hide a failed download behind sh's status.
             Method::Installer => Some(format!(
-                "curl --proto '=https' --tlsv1.2 -LsSf {INSTALLER} | sh"
+                "f=$(mktemp -t cmw-installer) && curl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\" && sh \"$f\""
             )),
             Method::Cargo => Some("cargo install cmw --locked".into()),
-            Method::Source { .. } => None,
+            Method::Source { .. } | Method::Unknown => None,
+        }
+    }
+
+    /// What actually runs: `command()`, failing on the first error and cleaning up after itself.
+    fn script(&self) -> Option<String> {
+        match self {
+            Method::Installer => Some(format!(
+                "set -e\nf=$(mktemp -t cmw-installer)\ntrap 'rm -f \"$f\"' EXIT\ncurl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\"\nsh \"$f\""
+            )),
+            other => other.command(),
+        }
+    }
+
+    /// Why cmw won't run an upgrade itself.
+    pub fn refusal(&self) -> String {
+        match self {
+            Method::Source { .. } => {
+                format!("cmw {CURRENT} was built from source, so it can't update itself")
+            }
+            _ => format!(
+                "can't tell how cmw {CURRENT} was installed (no installer, or more than one, claims it)"
+            ),
         }
     }
 
@@ -77,33 +103,58 @@ pub fn detect() -> Method {
     let cargo_home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| paths::home().join(".cargo"));
-    detect_from(&exe, &config, &cargo_home)
+    detect_from(&exe, &config, &cargo_home, CURRENT)
 }
 
-fn detect_from(exe: &Path, config_dir: &Path, cargo_home: &Path) -> Method {
+/// The installer receipt claims `exe`: it installed into a prefix containing it, at this version.
+fn receipt_claims(config_dir: &Path, exe: &Path, current: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(config_dir.join("cmw/cmw-receipt.json")) else {
+        return false;
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let prefix = doc["install_prefix"]
+        .as_str()
+        .is_some_and(|p| !p.is_empty() && exe.starts_with(p));
+    prefix && doc["version"].as_str() == Some(current)
+}
+
+/// Cargo's record of installing cmw at this version (`cmw 0.1.0 (<source>)`).
+fn cargo_record(cargo_home: &Path, current: &str) -> Option<String> {
+    let text = std::fs::read_to_string(cargo_home.join(".crates2.json")).ok()?;
+    let doc = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let prefix = format!("cmw {current} (");
+    doc["installs"]
+        .as_object()?
+        .keys()
+        .find(|k| k.starts_with(&prefix))
+        .cloned()
+}
+
+fn detect_from(exe: &Path, config_dir: &Path, cargo_home: &Path, current: &str) -> Method {
     if exe.to_string_lossy().contains("/Cellar/cmw/") {
         return Method::Homebrew;
     }
-    let in_cargo_bin = exe.starts_with(cargo_home.join("bin"));
-    if in_cargo_bin && config_dir.join("cmw/cmw-receipt.json").is_file() {
-        return Method::Installer;
-    }
-    if in_cargo_bin
-        && let Ok(text) = std::fs::read_to_string(cargo_home.join(".crates2.json"))
-        && let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text)
-        && let Some(installs) = doc["installs"].as_object()
-        && let Some(key) = installs.keys().find(|k| k.starts_with("cmw "))
-    {
-        if key.contains("(registry+") || key.contains("(sparse+") {
-            return Method::Cargo;
+    let receipt = receipt_claims(config_dir, exe, current);
+    let cargo = exe
+        .starts_with(cargo_home.join("bin"))
+        .then(|| cargo_record(cargo_home, current))
+        .flatten();
+    match (receipt, cargo) {
+        (true, None) => Method::Installer,
+        (false, Some(key)) if key.contains("(registry+") || key.contains("(sparse+") => {
+            Method::Cargo
         }
-        let path = key
-            .split("(path+file://")
-            .nth(1)
-            .map(|rest| rest.trim_end_matches(')').to_string());
-        return Method::Source { path };
+        (false, Some(key)) => Method::Source {
+            path: key
+                .split("(path+file://")
+                .nth(1)
+                .map(|rest| rest.trim_end_matches(')').to_string()),
+        },
+        // Both claim it, or neither: guessing could run the wrong installer.
+        _ => Method::Unknown,
     }
-    Method::Source { path: None }
 }
 
 /// `"1.2.3"` → (1, 2, 3). Pre-releases and junk → None (never offered as updates).
@@ -235,6 +286,9 @@ pub struct UpdateReport {
     /// Version `cmw` on PATH reports after updating.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<String>,
+    /// That `cmw`: what the TUI restarts into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_path: Option<PathBuf>,
 }
 
 impl Report for UpdateReport {
@@ -265,37 +319,53 @@ pub fn run(ctx: &Ctx, args: &UpdateArgs) -> Result<UpdateReport> {
         command: method.command(),
         updated: false,
         installed: None,
+        installed_path: None,
     };
     if args.check || !available {
         return Ok(report);
     }
-    let Some(cmd) = method.command() else {
+    let (Some(cmd), Some(script)) = (method.command(), method.script()) else {
         return Err(CmwError::refused(
             format!(
-                "cmw {CURRENT} was built from source, so it can't update itself to {}",
+                "{}; {} is available",
+                method.refusal(),
                 latest.unwrap_or_default()
             ),
             method.manual_hint(),
         ));
     };
+    let latest = latest.unwrap_or_default();
     ctx.progress(format!("running: {cmd}"));
-    run_streaming(ctx, &cmd)?;
-    report.updated = true;
-    report.installed = installed_version();
-    if let (Some(installed), Some(l)) = (&report.installed, &latest)
-        && installed != l
-    {
-        ctx.warn(format!(
-            "`cmw` on PATH still reports {installed}; another install may shadow the updated one"
-        ));
+    run_streaming(ctx, &script, &cmd)?;
+    // Success means the `cmw` people will run is the new one, not just that the installer exited 0.
+    let Some((path, installed)) = installed_version() else {
+        return Err(
+            CmwError::error("the upgrade finished, but no `cmw` was found on PATH").with_hint(cmd),
+        );
+    };
+    report.installed = Some(installed.clone());
+    report.installed_path = Some(path.clone());
+    if installed != latest {
+        let why = if method == Method::Homebrew {
+            "the new release may not be in Homebrew yet, or another cmw earlier on PATH shadows it"
+        } else {
+            "another cmw earlier on PATH may shadow the updated one"
+        };
+        return Err(CmwError::error(format!(
+            "the upgrade finished, but {} still reports {installed} ({why})",
+            path.display()
+        ))
+        .with_hint(cmd));
     }
+    report.updated = true;
     Ok(report)
 }
 
-/// Run `cmd` through `sh`, sending each output line to progress.
-fn run_streaming(ctx: &Ctx, cmd: &str) -> Result<()> {
+/// Run `script` through `sh` (stderr folded into stdout), sending each line to progress.
+/// `cmd` is how the command is shown in errors.
+fn run_streaming(ctx: &Ctx, script: &str, cmd: &str) -> Result<()> {
     let mut child = Command::new("sh")
-        .args(["-c", &format!("{cmd} 2>&1")])
+        .args(["-c", &format!("exec 2>&1\n{script}")])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -327,18 +397,19 @@ fn run_streaming(ctx: &Ctx, cmd: &str) -> Result<()> {
     }
 }
 
-/// The version `cmw --version` prints for the binary first on PATH.
-pub fn installed_version() -> Option<String> {
+/// The `cmw` first on PATH and the version it reports.
+fn installed_version() -> Option<(PathBuf, String)> {
     let exe = paths::find_in_path("cmw")?;
-    let out = Command::new(exe)
+    let out = Command::new(&exe)
         .arg("--version")
         .stdin(Stdio::null())
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout)
+    let version = String::from_utf8_lossy(&out.stdout)
         .split_whitespace()
-        .last()
-        .map(str::to_string)
+        .last()?
+        .to_string();
+    Some((exe, version))
 }
 
 #[cfg(test)]
@@ -376,15 +447,34 @@ mod tests {
         let cargo = t.path().join(".cargo");
         let config = t.path().join(".config");
         std::fs::create_dir_all(cargo.join("bin")).unwrap();
-        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(config.join("cmw")).unwrap();
         (t, cargo, config)
+    }
+
+    fn receipt(config: &Path, prefix: &Path, version: &str) {
+        std::fs::write(
+            config.join("cmw/cmw-receipt.json"),
+            format!(
+                r#"{{"install_prefix":"{}","version":"{version}","binaries":["cmw"]}}"#,
+                prefix.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    fn crates2(cargo: &Path, key: &str) {
+        std::fs::write(
+            cargo.join(".crates2.json"),
+            format!(r#"{{"installs":{{"{key}":{{}}}}}}"#),
+        )
+        .unwrap();
     }
 
     #[test]
     fn detects_homebrew_by_cellar_path() {
         let (_t, cargo, config) = fake_home();
         let exe = Path::new("/opt/homebrew/Cellar/cmw/0.1.0/bin/cmw");
-        assert_eq!(detect_from(exe, &config, &cargo), Method::Homebrew);
+        assert_eq!(detect_from(exe, &config, &cargo, "0.1.0"), Method::Homebrew);
         assert_eq!(
             Method::Homebrew.command().as_deref(),
             Some("brew upgrade equimper/tap/cmw")
@@ -392,35 +482,50 @@ mod tests {
     }
 
     #[test]
-    fn detects_dist_installer_by_receipt() {
+    fn detects_dist_installer_only_when_its_receipt_claims_this_binary() {
         let (_t, cargo, config) = fake_home();
-        std::fs::create_dir_all(config.join("cmw")).unwrap();
-        std::fs::write(config.join("cmw/cmw-receipt.json"), "{}").unwrap();
         let exe = cargo.join("bin/cmw");
-        assert_eq!(detect_from(&exe, &config, &cargo), Method::Installer);
-        assert!(
+        receipt(&config, &cargo, "0.1.0");
+        assert_eq!(
+            detect_from(&exe, &config, &cargo, "0.1.0"),
             Method::Installer
-                .command()
-                .unwrap()
-                .contains("cmw-installer.sh | sh")
         );
+        // A receipt from another version (since replaced) doesn't count.
+        assert_eq!(detect_from(&exe, &config, &cargo, "0.2.0"), Method::Unknown);
+        // Nor does one for another prefix.
+        receipt(&config, Path::new("/somewhere/else"), "0.1.0");
+        assert_eq!(detect_from(&exe, &config, &cargo, "0.1.0"), Method::Unknown);
+    }
+
+    #[test]
+    fn stale_receipt_does_not_override_a_cargo_source_install() {
+        let (_t, cargo, config) = fake_home();
+        let exe = cargo.join("bin/cmw");
+        receipt(&config, &cargo, "0.1.0");
+        crates2(&cargo, "cmw 0.2.0 (path+file:///Users/me/src/cmw)");
+        assert_eq!(
+            detect_from(&exe, &config, &cargo, "0.2.0"),
+            Method::Source {
+                path: Some("/Users/me/src/cmw".into())
+            }
+        );
+        // Both claiming the same version: ambiguous, so cmw runs neither.
+        crates2(&cargo, "cmw 0.1.0 (path+file:///Users/me/src/cmw)");
+        assert_eq!(detect_from(&exe, &config, &cargo, "0.1.0"), Method::Unknown);
+        assert_eq!(Method::Unknown.command(), None);
     }
 
     #[test]
     fn detects_cargo_registry_and_path_installs() {
         let (_t, cargo, config) = fake_home();
         let exe = cargo.join("bin/cmw");
-        let crates = |key: &str| {
-            std::fs::write(
-                cargo.join(".crates2.json"),
-                format!(r#"{{"installs":{{"{key}":{{}}}}}}"#),
-            )
-            .unwrap();
-        };
-        crates("cmw 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)");
-        assert_eq!(detect_from(&exe, &config, &cargo), Method::Cargo);
-        crates("cmw 0.1.0 (path+file:///Users/me/src/cmw)");
-        let m = detect_from(&exe, &config, &cargo);
+        crates2(
+            &cargo,
+            "cmw 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+        );
+        assert_eq!(detect_from(&exe, &config, &cargo, "0.1.0"), Method::Cargo);
+        crates2(&cargo, "cmw 0.1.0 (path+file:///Users/me/src/cmw)");
+        let m = detect_from(&exe, &config, &cargo, "0.1.0");
         assert_eq!(
             m,
             Method::Source {
@@ -435,10 +540,23 @@ mod tests {
     }
 
     #[test]
-    fn unknown_location_is_source() {
+    fn unknown_location_is_unknown() {
         let (_t, cargo, config) = fake_home();
-        let m = detect_from(Path::new("/usr/local/bin/cmw"), &config, &cargo);
-        assert_eq!(m, Method::Source { path: None });
+        let m = detect_from(Path::new("/usr/local/bin/cmw"), &config, &cargo, "0.1.0");
+        assert_eq!(m, Method::Unknown);
         assert_eq!(m.manual_hint(), "brew install equimper/tap/cmw");
+    }
+
+    /// The installer script must fail when the download fails (no `curl | sh` masking).
+    #[test]
+    fn installer_script_fails_when_the_download_fails() {
+        let script = Method::Installer
+            .script()
+            .unwrap()
+            .replace(INSTALLER, "http://127.0.0.1:9/cmw-installer.sh")
+            .replace("--proto '=https' ", "");
+        let ctx = Ctx::new(true, "test");
+        let err = run_streaming(&ctx, &script, "installer").unwrap_err();
+        assert!(err.message.contains("failed"), "{}", err.message);
     }
 }
