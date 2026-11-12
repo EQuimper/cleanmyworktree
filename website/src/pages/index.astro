@@ -3,6 +3,7 @@ import '@fontsource-variable/archivo/wdth.css';
 import '@fontsource-variable/martian-mono/index.css';
 import '../styles/shared.css';
 import '../styles/site.css';
+import Duel from '../components/Duel.astro';
 import { brewInstall, repo, version } from '../lib/release';
 
 const title = 'cmw: fast, disk-cheap git worktrees for humans and AI agents';
@@ -100,19 +101,7 @@ const contract = [
         <a class="docs-link" href="/docs/">Read the docs</a>
       </div>
 
-      <figure class="race" aria-label="Setting up a worktree for a project with a 1.4 GB node_modules">
-        <div class="lane slow">
-          <p class="who"><code>git worktree add</code>, then <code>npm install</code></p>
-          <div class="track"><span class="fill"></span></div>
-          <p class="result">Minutes, and 1.4 GB more disk</p>
-        </div>
-        <div class="lane fast">
-          <p class="who"><code>cmw new feat/login</code></p>
-          <div class="track"><span class="fill"></span></div>
-          <p class="result"><strong>1.6 s</strong>, almost no extra disk</p>
-        </div>
-        <figcaption>A 1.4 GB node_modules with 107k files, on APFS.</figcaption>
-      </figure>
+      <Duel />
     </header>
 
     <main>

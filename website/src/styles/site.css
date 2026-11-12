@@ -226,16 +226,16 @@ main > .stop::after {
 }
 
 h1 {
-  max-width: 12ch;
-  margin-top: clamp(2rem, 6vh, 4rem);
-  font-size: clamp(2.75rem, min(9vw, 12vh), 8rem);
+  max-width: 15ch;
+  margin-top: clamp(1.25rem, 4vh, 3rem);
+  font-size: clamp(2.6rem, min(6.4vw, 10vh), 6rem);
   line-height: 0.94;
   letter-spacing: -0.045em;
 }
 
 .lede {
-  max-width: 44ch;
-  margin-top: 1.75rem;
+  max-width: 52ch;
+  margin-top: 1.25rem;
   font-size: clamp(1.15rem, 1.8vw, 1.4rem);
   font-weight: 500;
   line-height: 1.4;
@@ -251,7 +251,7 @@ h1 {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem 1.5rem;
-  margin-top: 1.75rem;
+  margin-top: 1.25rem;
 }
 
 .command {
@@ -298,125 +298,187 @@ h1 {
   text-underline-offset: 0.2em;
 }
 
-/* The race: the one moving thing on the page. */
+/* The duel: the same worktree, set up two ways. */
 
-.race {
+.duel {
+  max-width: 76rem;
+  margin-top: clamp(2rem, 5vh, 3rem);
+}
+
+.ttys {
   display: grid;
-  gap: 1.5rem;
-  max-width: 60rem;
-  margin-top: clamp(2.5rem, 6vh, 4rem);
-  padding: clamp(1.25rem, 3vw, 2rem);
-  border-radius: 1rem;
-  background: var(--ink);
-  color: var(--paper);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
 }
 
-.lane {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.6rem 1.25rem;
-}
-
-.who {
-  grid-column: 1 / -1;
-  color: #c9d1cc;
-  font-size: 0.95rem;
-}
-
-.who code {
-  color: var(--paper);
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.track {
-  height: 0.85rem;
+.tty {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   overflow: hidden;
+  border-radius: 0.9rem;
+  background: var(--graphite);
+  color: #d9e0dc;
+  box-shadow: 0 24px 50px -24px rgb(0 0 0 / 45%);
+}
+
+.tty-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--graphite-line);
+  font-size: 0.85rem;
+}
+
+.lights {
+  display: inline-flex;
+  flex: none;
+  gap: 0.4rem;
+}
+
+.lights i {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: #3a3f3c;
+}
+
+.tty-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #aab3ae;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clock {
+  flex: none;
+  margin-left: auto;
+  padding: 0.15rem 0.55rem;
   border-radius: 999px;
   background: #262b28;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
-.track .fill {
+.cmw .clock {
+  transition:
+    background-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+}
+
+.cmw.done .clock,
+.duel:not(.playing) .cmw .clock {
+  background: var(--mint);
+  color: var(--ink);
+}
+
+.tty-screen {
+  flex: 1;
+  min-height: 12.5rem;
+  padding: 1rem 1.1rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: clamp(0.68rem, 0.95vw, 0.76rem);
+  line-height: 1.75;
+}
+
+.tty-screen .line {
   display: block;
-  height: 100%;
-  border-radius: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.slow .track .fill {
-  background: repeating-linear-gradient(-45deg, #8b938e 0 8px, #6f7772 8px 16px);
+.tty-screen .line + .line:has(.prompt) {
+  margin-top: 0.6rem;
 }
 
-.fast .track .fill {
+.out {
+  color: #aab3ae;
+}
+
+.spin {
+  color: var(--mint);
+  font-size: 1.35em;
+  line-height: 1.4;
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
   background: var(--mint);
 }
 
-.result {
-  min-width: 15.5rem;
-  color: #c9d1cc;
-  font-size: 0.95rem;
-}
-
-.fast .result {
-  color: var(--paper);
-}
-
-.fast .result strong {
-  color: var(--mint);
-  font-stretch: 115%;
-  font-weight: 800;
-}
-
-.race figcaption {
-  color: #8b938e;
-  font-size: 0.82rem;
-}
-
 @media (prefers-reduced-motion: no-preference) {
-  .track .fill {
-    transform-origin: left;
-  }
-
-  .fast .track .fill {
-    animation: fill 0.6s 0.5s var(--ease-out) both;
-  }
-
-  .slow .track .fill {
-    animation:
-      fill 9s 0.5s var(--ease-in-out) both,
-      crawl 0.6s linear 15;
-  }
-
-  .fast .result {
-    animation: appear 0.3s 1.1s var(--ease-out) both;
-  }
-
-  .slow .result {
-    animation: appear 0.3s 9.5s var(--ease-out) both;
+  .cursor {
+    animation: blink 1s steps(1) infinite;
   }
 }
 
-@keyframes fill {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
-}
-
-@keyframes crawl {
-  to {
-    background-position: 22.6px 0;
-  }
-}
-
-@keyframes appear {
-  from {
+@keyframes blink {
+  50% {
     opacity: 0;
   }
-  to {
-    opacity: 1;
+}
+
+.tty-foot {
+  padding: 0.65rem 1.1rem;
+  border-top: 1px solid var(--graphite-line);
+  color: #8b938e;
+  font-size: 0.8rem;
+}
+
+.cmw .tty-foot {
+  color: var(--mint);
+}
+
+.duel figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.85rem;
+  font-size: 0.85rem;
+}
+
+.replay {
+  padding: 0.35rem 0.9rem;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.85rem;
+  font-weight: 700;
+  transition:
+    background-color 150ms ease,
+    transform 120ms var(--ease-out);
+}
+
+.replay:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .replay:hover {
+    background: var(--ink);
+    color: var(--mint);
+  }
+}
+
+@media (max-width: 52rem) {
+  .ttys {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tty-screen {
+    min-height: 0;
   }
 }
 
@@ -856,14 +918,6 @@ h1 {
 @media (max-width: 30rem) {
   .bar {
     gap: 1.1rem;
-  }
-
-  .lane {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .result {
-    min-width: 0;
   }
 
   .agents dl div {
