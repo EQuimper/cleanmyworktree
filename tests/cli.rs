@@ -34,7 +34,7 @@ fn new_plain_prints_path_and_hydrates() {
 }
 
 #[test]
-fn new_json_envelope_and_env_var() {
+fn new_json_envelope() {
     let sb = Sandbox::new();
     let wt = sb.wt("wt");
     let (code, v) = sb.json(&["new", "feat/x", "--path", s(&wt)]);
