@@ -84,4 +84,71 @@ mod tests {
             assert_eq!(r.human(), r.script);
         }
     }
+
+    /// Run the real wrapper with a stub `cmw` that answers the way the TUI does.
+    fn cd_after_tui(shell: Shell, exe: &str) -> Option<String> {
+        let sh = crate::paths::find_in_path(exe)?;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let (bin, dest) = (root.join("bin"), root.join("dest"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        let stub = bin.join("cmw");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n[ -n \"$CMW_CD_FILE\" ] && printf %s '{}' > \"$CMW_CD_FILE\"\nexit 3\n",
+                dest.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let init = root.join("init");
+        std::fs::write(&init, init_script(shell)).unwrap();
+        let script = match shell {
+            Shell::Fish => format!(
+                "source {}; set -x PATH {} $PATH; cmw; echo $status; pwd",
+                init.display(),
+                bin.display()
+            ),
+            _ => format!(
+                "source {}; PATH={}:$PATH; cmw; echo $?; pwd",
+                init.display(),
+                bin.display()
+            ),
+        };
+        let mut cmd = std::process::Command::new(sh);
+        if matches!(shell, Shell::Fish) {
+            cmd.arg("--no-config");
+        } else if matches!(shell, Shell::Zsh) {
+            cmd.arg("-f");
+        } else {
+            cmd.args(["--norc", "--noprofile"]);
+        }
+        let out = cmd.arg("-c").arg(script).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            text.ends_with(&format!("{}\n", dest.display())),
+            "{exe}: {text}"
+        );
+        Some(text)
+    }
+
+    fn init_script(shell: Shell) -> String {
+        init(&ShellInitArgs { shell }).script
+    }
+
+    #[test]
+    fn bare_cmw_cds_where_the_tui_says_and_keeps_its_exit_code() {
+        for (shell, exe) in [
+            (Shell::Zsh, "zsh"),
+            (Shell::Bash, "bash"),
+            (Shell::Fish, "fish"),
+        ] {
+            if let Some(out) = cd_after_tui(shell, exe) {
+                assert!(out.starts_with("3\n"), "{exe}: {out}");
+            }
+        }
+    }
 }

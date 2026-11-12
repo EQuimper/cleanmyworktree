@@ -711,16 +711,6 @@ fn clean(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             r.skipped.len()
         ));
     }
-    if !r.pruned.is_empty() {
-        notes.push(format!(
-            "{} stale registration{}",
-            r.pruned.len(),
-            plural(r.pruned.len())
-        ));
-    }
-    if !r.derived_data.is_empty() {
-        notes.push(format!("{} orphaned DerivedData", r.derived_data.len()));
-    }
     if !notes.is_empty() {
         lines.push(Line::from(Span::styled(notes.join(" · "), t.fg(t.faint))));
     }

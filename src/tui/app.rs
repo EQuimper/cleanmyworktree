@@ -89,6 +89,7 @@ impl Row {
         Target {
             path: self.st.path.clone(),
             branch: self.st.branch.clone(),
+            repo_main: self.repo_main.clone(),
         }
     }
 
@@ -116,7 +117,7 @@ pub enum Tone {
 
 pub enum Action {
     Remove { target: Target, force: bool },
-    Clean { picked: Option<Vec<Target>> },
+    Clean { picked: Vec<Target> },
     Slim { idle: u64 },
     InstallShell { rc: PathBuf, line: String },
 }
@@ -447,8 +448,9 @@ impl App {
                 match res {
                     Ok(r) => {
                         if self.cwd.starts_with(&target.path) {
-                            // The caller's shell sits in a directory that no longer exists.
-                            self.cd_on_exit = self.main_of(&target.path);
+                            // We (and the caller's shell) were inside it: move to the main
+                            // checkout so reloads, New and Clean keep working.
+                            self.relocate(target.repo_main.clone());
                         }
                         let mut msg = format!("Removed {}", target.label());
                         if r.branch_deleted {
@@ -509,12 +511,20 @@ impl App {
         }
     }
 
-    fn main_of(&self, path: &Path) -> Option<PathBuf> {
-        self.rows
-            .ready()?
-            .iter()
-            .find(|r| r.st.path == path)
-            .and_then(|r| r.repo_main.clone())
+    /// Continue from `dir` after the worktree we started in was removed.
+    fn relocate(&mut self, dir: Option<PathBuf>) {
+        let Some(dir) = dir.filter(|d| d.is_dir()) else {
+            self.toast(
+                "The worktree cmw started in was removed; restart cmw from another directory",
+                Tone::Warn,
+            );
+            return;
+        };
+        self.branch = git::run(&dir, &["branch", "--show-current"])
+            .ok()
+            .filter(|b| !b.is_empty());
+        self.cwd = dir.clone();
+        self.cd_on_exit = Some(dir);
     }
 
     fn show_error(&mut self, title: &str, e: &CmwError) {
@@ -814,13 +824,13 @@ impl App {
                     .map(|(i, _)| Target {
                         path: i.path.clone(),
                         branch: i.branch.clone(),
+                        repo_main: None,
                     })
                     .collect();
                 if picked.is_empty() {
                     self.toast("Nothing selected", Tone::Warn);
                     return;
                 }
-                let every = picked.len() == n;
                 let mut lines: Vec<String> = picked
                     .iter()
                     .take(8)
@@ -842,9 +852,7 @@ impl App {
                     ),
                     lines,
                     danger: true,
-                    action: Action::Clean {
-                        picked: if every { None } else { Some(picked) },
-                    },
+                    action: Action::Clean { picked },
                 });
             }
             _ => {}
@@ -1145,7 +1153,7 @@ impl App {
             }
             Action::Clean { picked } => {
                 self.start_busy("Removing merged worktrees".into());
-                jobs::clean(&self.tx, &self.cwd, self.all, picked);
+                jobs::clean(&self.tx, picked);
             }
             Action::Slim { idle } => {
                 self.start_busy("Deleting build caches".into());

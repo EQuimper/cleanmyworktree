@@ -58,6 +58,8 @@ pub enum Done {
 pub struct Target {
     pub path: PathBuf,
     pub branch: Option<String>,
+    /// Main checkout of the target's repo: where to go if the target is removed from under us.
+    pub repo_main: Option<PathBuf>,
 }
 
 impl Target {
@@ -256,48 +258,28 @@ pub fn remove(tx: &Sender<Msg>, target: Target, force: bool) {
     });
 }
 
-/// Remove merged worktrees: every candidate through `gc --yes` (which also prunes stale
-/// registrations and orphaned DerivedData), or only the picked ones through `rm`.
-pub fn clean(tx: &Sender<Msg>, cwd: &Path, all: bool, picked: Option<Vec<Target>>) {
-    let (tx, cwd) = (tx.clone(), cwd.to_path_buf());
+/// Remove the merged worktrees the user confirmed, and only those (see `gc::gc_picked`).
+pub fn clean(tx: &Sender<Msg>, picked: Vec<Target>) {
+    let tx = tx.clone();
     spawn(move || {
         let ctx = streaming("gc", &tx);
-        let res = match picked {
-            None => {
-                let args = GcArgs {
-                    yes: true,
-                    stale: None,
-                    all,
-                };
-                if all {
-                    // `--all` locks each repo itself.
-                    text(&ctx, gc::gc(&ctx, &cwd, &args))
-                } else {
-                    locked_text(&ctx, &cwd, |ctx| gc::gc(ctx, &cwd, &args))
+        let paths: Vec<PathBuf> = picked.iter().map(|t| t.path.clone()).collect();
+        let lines: Vec<String> = gc::gc_picked(&ctx, &paths)
+            .into_iter()
+            .map(|(path, res)| match res {
+                Ok(r) => r.human(),
+                Err(e) => {
+                    let label = picked
+                        .iter()
+                        .find(|t| t.path == path)
+                        .map_or_else(|| path.display().to_string(), Target::label);
+                    format!("kept {label}: {}", e.message)
                 }
-            }
-            Some(targets) => {
-                let mut lines = Vec::new();
-                for t in targets {
-                    let args = RmArgs {
-                        name: t.path.display().to_string(),
-                        force: false,
-                        keep_branch: false,
-                        dry_run: false,
-                    };
-                    let res =
-                        crate::lock_repo(&t.path).and_then(|_lock| gc::rm(&ctx, &t.path, &args));
-                    match res {
-                        Ok(r) => lines.push(r.human()),
-                        Err(e) => lines.push(format!("kept {}: {}", t.label(), e.message)),
-                    }
-                }
-                Ok(with_warnings(lines.join("\n"), &ctx.warnings()))
-            }
-        };
+            })
+            .collect();
         let _ = tx.send(Msg::Done(Done::Text {
             title: "Cleaned up".into(),
-            res,
+            res: Ok(with_warnings(lines.join("\n"), &ctx.warnings())),
         }));
     });
 }

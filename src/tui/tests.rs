@@ -227,3 +227,79 @@ fn tiny_terminal_gets_a_hint_instead_of_a_broken_layout() {
     let text: String = buf.content().iter().map(|c| c.symbol()).collect();
     assert!(text.contains("bigger"), "{text}");
 }
+
+fn removed(path: &str) -> crate::gc::RmReport {
+    crate::gc::RmReport {
+        path: PathBuf::from(path),
+        branch: Some("feat/cart".into()),
+        dry_run: false,
+        removed: true,
+        branch_deleted: false,
+        branch_kept_reason: None,
+        derived_data_removed: vec![],
+        watchman_unwatched: false,
+        admin_cleanup: String::new(),
+    }
+}
+
+fn target(path: &str, repo_main: Option<&str>) -> super::jobs::Target {
+    super::jobs::Target {
+        path: PathBuf::from(path),
+        branch: Some("feat/cart".into()),
+        repo_main: repo_main.map(PathBuf::from),
+    }
+}
+
+#[test]
+fn removing_the_launch_worktree_moves_to_the_main_checkout() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    let main = env!("CARGO_MANIFEST_DIR");
+    app.cwd = PathBuf::from("/gone/wt/src");
+    app.on_msg(Msg::Done(Done::Remove {
+        target: target("/gone/wt", Some(main)),
+        force: true,
+        res: Ok(removed("/gone/wt")),
+        warnings: vec![],
+    }));
+    assert_eq!(app.cwd, PathBuf::from(main));
+    assert_eq!(app.cd_on_exit, Some(PathBuf::from(main)));
+}
+
+#[test]
+fn removing_another_worktree_keeps_cwd() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    let before = app.cwd.clone();
+    app.on_msg(Msg::Done(Done::Remove {
+        target: target("/elsewhere/wt", Some("/")),
+        force: false,
+        res: Ok(removed("/elsewhere/wt")),
+        warnings: vec![],
+    }));
+    assert_eq!(app.cwd, before);
+    assert_eq!(app.cd_on_exit, None);
+}
+
+#[test]
+fn refused_remove_needs_the_exact_branch_name_to_force() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    app.on_msg(Msg::Done(Done::Remove {
+        target: target("/nowhere/wt", None),
+        force: false,
+        res: Err(crate::output::CmwError::refused(
+            "3 uncommitted changes in /nowhere/wt",
+            "cmw rm feat/cart --force",
+        )),
+        warnings: vec![],
+    }));
+    assert!(matches!(app.modal, Some(Modal::TypeToConfirm { .. })));
+    typed(&mut app, "feat/car");
+    key(&mut app, KeyCode::Enter);
+    assert!(app.busy.is_none(), "a near miss must not force anything");
+    typed(&mut app, "t");
+    key(&mut app, KeyCode::Enter);
+    assert!(app.modal.is_none());
+    assert_eq!(app.busy.as_ref().unwrap().label, "Removing feat/cart");
+}

@@ -11,7 +11,7 @@ use crate::inventory::{self, GhCache, RepoRef, StatusOpts, WorktreeStatus};
 use crate::output::{CmwError, Ctx, Report, Result, human_bytes, sh_quote};
 use crate::{config, lock, paths, rules};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -810,6 +810,76 @@ fn gc_impl(ctx: &Ctx, cwd: &Path, args: &GcArgs, env: &Env) -> Result<GcReport> 
     Ok(report)
 }
 
+/// Remove exactly the worktrees in `picked` (offered by a `gc` preview and confirmed by a person).
+/// Each repo is locked and re-previewed first, so a target that changed since the preview (new
+/// work, no longer merged) is refused rather than removed, and nothing outside `picked` is touched.
+/// The caller must not hold these repos' locks.
+pub fn gc_picked(ctx: &Ctx, picked: &[PathBuf]) -> Vec<(PathBuf, Result<RmReport>)> {
+    gc_picked_impl(ctx, picked, &Env::real())
+}
+
+fn gc_picked_impl(ctx: &Ctx, picked: &[PathBuf], env: &Env) -> Vec<(PathBuf, Result<RmReport>)> {
+    let mut out = Vec::new();
+    let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for p in picked {
+        match git::common_dir(p) {
+            Ok(c) => by_repo.entry(canonical(&c)).or_default().push(p.clone()),
+            Err(e) => out.push((p.clone(), Err(e))),
+        }
+    }
+    for (common, paths) in by_repo {
+        let checked = (|| -> Result<Vec<(PathBuf, Result<RmReport>)>> {
+            let _guard = lock::acquire(&common, LOCK_TIMEOUT)?;
+            let main = git::main_worktree(&paths[0])?
+                .ok_or_else(|| CmwError::not_found("no main checkout found"))?;
+            let preview = gc_impl(
+                ctx,
+                &main.path,
+                &GcArgs {
+                    yes: false,
+                    stale: None,
+                    all: false,
+                },
+                env,
+            )?;
+            let eligible: BTreeSet<PathBuf> = preview
+                .would_remove
+                .iter()
+                .map(|i| canonical(&i.path))
+                .collect();
+            Ok(paths
+                .iter()
+                .map(|p| {
+                    let res = if eligible.contains(&canonical(p)) {
+                        let args = RmArgs {
+                            name: p.display().to_string(),
+                            force: false,
+                            keep_branch: false,
+                            dry_run: false,
+                        };
+                        rm_impl(ctx, &main.path, &args, env)
+                    } else {
+                        Err(CmwError::refused(
+                            format!("{} is no longer a clean, merged worktree", p.display()),
+                            "cmw gc",
+                        ))
+                    };
+                    (p.clone(), res)
+                })
+                .collect())
+        })();
+        match checked {
+            Ok(results) => out.extend(results),
+            Err(e) => out.extend(
+                paths
+                    .into_iter()
+                    .map(|p| (p, Err(CmwError::new(e.kind, e.message.clone())))),
+            ),
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn gc_repo(
     ctx: &Ctx,
@@ -1245,6 +1315,32 @@ mod tests {
                 &format!("refs/heads/{b}"),
             ],
         )
+    }
+
+    fn merged_worktree(repo: &Path, name: &str) -> PathBuf {
+        let wt = add_worktree(repo, name);
+        commit_file(&wt, &format!("{name}.txt"));
+        git(repo, &["merge", "--no-edit", name]);
+        wt
+    }
+
+    #[test]
+    fn gc_picked_removes_only_confirmed_targets_still_eligible() {
+        let (t, repo) = repo();
+        let a = merged_worktree(&repo, "a");
+        let c = merged_worktree(&repo, "c");
+        // After the preview: `b` becomes merged (not confirmed), `c` gets new work.
+        let b = merged_worktree(&repo, "b");
+        std::fs::write(c.join("wip.txt"), "wip").unwrap();
+
+        let out = gc_picked_impl(&ctx(), &[a.clone(), c.clone()], &env(t.path()));
+        assert_eq!(out.len(), 2);
+        assert!(out[0].1.is_ok(), "{:?}", out[0].1.as_ref().err());
+        let kept = out[1].1.as_ref().unwrap_err();
+        assert_eq!(kept.kind, ErrorKind::Refused);
+        assert!(!a.exists(), "confirmed and eligible: removed");
+        assert!(b.exists(), "never confirmed: untouched");
+        assert!(c.exists(), "changed since the preview: kept");
     }
 
     #[test]
