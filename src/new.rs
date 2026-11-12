@@ -90,11 +90,16 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
                 ctx.progress(r.human());
                 hydrate_report = Some(r);
             }
-            Err(e) => ctx.warn(format!(
-                "hydrate failed: {}; retry with: cmw hydrate {}",
-                e.message,
-                crate::output::sh_quote(&path.to_string_lossy())
-            )),
+            // The worktree exists but isn't usable as documented (`data.hydrate.ready`), so fail
+            // loudly. Re-running `cmw new` is idempotent and returns the same path.
+            Err(e) => {
+                let quoted = crate::output::sh_quote(&path.to_string_lossy());
+                return Err(crate::output::CmwError::new(
+                    e.kind,
+                    format!("worktree created at {} but hydrate failed: {}", path.display(), e.message),
+                )
+                .with_hint(e.hint.unwrap_or_else(|| format!("cmw hydrate {quoted}"))));
+            }
         }
     }
 

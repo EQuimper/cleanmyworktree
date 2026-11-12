@@ -20,7 +20,11 @@ use output::{CmwError, Ctx, Report, Result};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long to wait for another cmw holding the repo lock. `CMW_LOCK_TIMEOUT_SECS` overrides 30s.
+fn lock_timeout() -> Duration {
+    let secs = std::env::var("CMW_LOCK_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    Duration::from_secs(secs)
+}
 
 fn main() {
     let cli = match Cli::try_parse() {
@@ -77,10 +81,10 @@ fn finish<T: Report>(ctx: &Ctx, res: Result<T>) -> i32 {
     }
 }
 
-/// Take the repo-wide lock for commands that change worktrees in the current repo.
-fn lock_repo(cwd: &Path) -> Result<lock::RepoLock> {
-    let common = git::common_dir(cwd)?;
-    lock::acquire(&common, LOCK_TIMEOUT)
+/// Take the repo-wide lock of the repository containing `dir`.
+pub(crate) fn lock_repo(dir: &Path) -> Result<lock::RepoLock> {
+    let common = git::common_dir(dir)?;
+    lock::acquire(&common, lock_timeout())
 }
 
 fn run(cli: Cli) -> i32 {
@@ -104,15 +108,21 @@ fn run(cli: Cli) -> i32 {
 
     let mutating = match &cli.command {
         Command::New(_) | Command::Rm(_) => true,
-        Command::Hook { command: HookCommand::ClaudeCreate | HookCommand::ClaudeRemove } => true,
         Command::Hydrate(a) => !a.dry_run,
         Command::Gc(a) => a.yes && !a.all,
         Command::CleanArtifacts(a) => a.yes && !a.all,
         Command::Env { command: EnvCommand::Sync(a) } => !a.dry_run,
+        // Hooks lock the repo named in their stdin payload (see skill.rs); `--all` modes lock per repo.
         _ => false,
     };
+    // Lock the repo that is actually mutated: an explicit target path may belong to another repo than cwd.
+    let lock_target: PathBuf = match &cli.command {
+        Command::Hydrate(a) => a.path.as_ref().map(|p| cwd.join(p)).unwrap_or_else(|| cwd.clone()),
+        Command::Env { command: EnvCommand::Sync(a) } => a.path.as_ref().map(|p| cwd.join(p)).unwrap_or_else(|| cwd.clone()),
+        _ => cwd.clone(),
+    };
     let _lock = if mutating {
-        match lock_repo(&cwd) {
+        match lock_repo(&lock_target) {
             Ok(l) => Some(l),
             Err(e) => return ctx.emit_error(&e),
         }

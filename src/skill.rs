@@ -179,6 +179,7 @@ pub fn hook_claude_create(ctx: &Ctx, cwd: &Path) -> Result<TextReport> {
         install: InstallFlags { no_install: false, no_slow: true },
     };
     let dir = p.cwd.unwrap_or_else(|| cwd.to_path_buf());
+    let _lock = crate::lock_repo(&dir)?;
     let report = crate::new::run(ctx, &dir, &args)?;
     Ok(TextReport { text: worktree_path_of(&report)? })
 }
@@ -198,6 +199,7 @@ pub fn hook_claude_remove(ctx: &Ctx, cwd: &Path) -> Result<TextReport> {
     let p = parse_remove(&read_stdin()?)?;
     let args = RmArgs { name: p.worktree_path.clone(), force: false, keep_branch: false, dry_run: false };
     let dir = p.cwd.unwrap_or_else(|| cwd.to_path_buf());
+    let _lock = crate::lock_repo(&dir)?;
     crate::gc::rm(ctx, &dir, &args)?;
     Ok(TextReport { text: format!("removed {}", p.worktree_path) })
 }
