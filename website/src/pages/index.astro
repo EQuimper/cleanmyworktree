@@ -7,110 +7,46 @@ import { brewInstall, repo, version } from '../lib/release';
 
 const title = 'cmw: fast, disk-cheap git worktrees for humans and AI agents';
 const description =
-  'cmw creates git worktrees with dependencies already in place. node_modules, Pods and vendor are copy-on-write clones of your main checkout, so each worktree is ready in seconds and costs almost no disk.';
+  'cmw fills new git worktrees with your node_modules, Pods and .env as copy-on-write clones of your main checkout. Ready in seconds, almost no extra disk, and cleanup that never loses work.';
 const image = new URL('/og.png', Astro.site);
 
 const wt = '~/.cmw/worktrees/shop';
 
-type Seg = [text: string, cls?: string];
-type Line = { cls: string; segs: Seg[] };
-const cmd = (text: string): Line => ({ cls: 'line', segs: [['$ ', 'prompt'], [text, 'cmd']] });
-const out = (...segs: (string | Seg)[]): Line => ({
-  cls: 'line',
-  segs: segs.map((s) => (typeof s === 'string' ? [s] : s)),
-});
-const dim = (text: string): Line => ({ cls: 'line dim', segs: [[text]] });
-const err = (text: string): Line => ({ cls: 'line err', segs: [[text]] });
-
-const sessions: { id: string; lines: Line[] }[] = [
+const gaps = [
   {
-    id: 'new',
-    lines: [
-      cmd('cmw new feat/login'),
-      out(`hydrated ${wt}/feat-login in 1.6s: 3 cloned, 2 copied, 4 skipped; installs: 1 up to date; `, ['ready', 'ok']),
-      out(`${wt}/feat-login`),
-      cmd('cmw cd feat/login'),
-    ],
+    missing: 'Dependencies',
+    without: 'node_modules, Pods and vendor aren’t there. Reinstalling takes minutes and a full copy on disk.',
+    with: 'Cloned from your main checkout in seconds. If the lockfile matches, nothing installs.',
   },
   {
-    id: 'ls',
-    lines: [
-      cmd('cmw ls'),
-      out('shop (~/code/shop/.git)'),
-      dim('BRANCH        STATE    MERGED  IDLE  HYDRATED  PATH'),
-      out('main [main]   clean    ?       0d    no        ~/code/shop'),
-      out(`feat/login    clean    no      0d    yes       ${wt}/feat-login`),
-      out(`fix/checkout  2 dirty  no      1d    yes       ${wt}/fix-checkout`),
-      out(`spike/search  clean    `, ['yes', 'ok'], `     23d   yes       ${wt}/spike-search`),
-    ],
+    missing: 'Secrets',
+    without: '.env, local.properties and keystores are gitignored, so they don’t come along.',
+    with: 'Copied into the worktree. cmw env sync refreshes them after you change one.',
   },
   {
-    id: 'gc',
-    lines: [
-      cmd('cmw gc'),
-      out('would remove 1 merged worktree(s):'),
-      out(`  spike/search  [gh]  ${wt}/spike-search`),
-      dim('run: cmw gc --yes'),
-      cmd('cmw gc --yes'),
-      out('removed 1 merged worktree(s):'),
-      out(`  spike/search  [gh, branch deleted]  ${wt}/spike-search`),
-      out(['freed ~2.1 GB', 'ok'], ' (change in free disk space)'),
-    ],
+    missing: 'Cleanup',
+    without: 'Deleting the folder leaves DerivedData, .cxx and build caches behind.',
+    with: 'cmw rm removes the worktree, its caches, and the branch once it’s merged.',
   },
 ];
 
-const refused: Line[] = [
-  cmd('cmw rm fix/checkout'),
-  err(`error: 2 uncommitted changes in ${wt}/fix-checkout`),
-  out('  fix: ', ['cmw rm fix/checkout --force', 'ok']),
-  dim('exit 3'),
+const tree = [
+  { path: 'node_modules/', strategy: 'clone', why: 'Works from any path, so it’s cloned' },
+  { path: 'ios/Pods/', strategy: 'clone', why: 'Same, for CocoaPods' },
+  { path: '.env.local', strategy: 'copy', why: 'Each worktree gets its own copy' },
+  { path: 'android/local.properties', strategy: 'copy', why: 'Machine-local config' },
+  { path: '.venv/', strategy: 'regen', why: 'Holds absolute paths, so it’s rebuilt' },
+  { path: '.next/', strategy: 'skip', why: 'Rebuilt on the first run' },
+  { path: 'ios/DerivedData/', strategy: 'skip', why: 'Tied to the original path' },
 ];
-
-const json: Line[] = [
-  cmd('cmw new fix/flaky-test --json'),
-  out('{'),
-  out('  "ok": ', ['true', 'ok'], ','),
-  out('  "command": "new",'),
-  out('  "data": {'),
-  out(`    "path": "${wt}/fix-flaky-test",`),
-  out('    "hydrate": { "ready": ', ['true', 'ok'], ', "needs_setup": [] }'),
-  out('  },'),
-  out('  "warnings": []'),
-  out('}'),
-];
-
-const strategies = [
-  {
-    name: 'clone',
-    text: 'Dependencies move safely, so they are cloned copy-on-write. Instant, and free until a file changes.',
-    examples: ['node_modules', 'Pods', 'vendor', 'target', '.turbo'],
-  },
-  {
-    name: 'copy',
-    text: 'Secrets and machine-local config. Each worktree gets its own copy.',
-    examples: ['.env*', 'local.properties', 'google-services.json', '*.keystore'],
-  },
-  {
-    name: 'regen',
-    text: 'Holds absolute paths. A cloned venv would install into main’s, so it is rebuilt.',
-    examples: ['.venv', '.dart_tool'],
-  },
-  {
-    name: 'skip',
-    text: 'Build output tied to the original path. Left behind, and cleaned up later.',
-    examples: ['DerivedData', '.cxx', 'build/', '.next', '.expo'],
-  },
-];
-
-const stacks = ['npm', 'pnpm', 'yarn', 'bun', 'CocoaPods', 'SPM', 'Gradle', 'Expo', 'React Native', 'Composer', 'uv', 'poetry', 'Cargo'];
 
 const contract = [
-  ['--json', 'One JSON document on stdout, every command.'],
-  ['exit codes', '0 ok · 1 error · 2 usage · 3 refused · 4 not found'],
-  ['no prompts', 'Never reads stdin. Destructive commands are dry runs until --yes.'],
-  ['fix hints', 'Every refusal names the exact command that resolves it.'],
-  ['idempotent', 'Re-run new or hydrate any time. Same branch, same path.'],
-  ['parallel-safe', 'A lock per repo serializes concurrent runs.'],
+  ['--json', 'One JSON document on stdout, for every command.'],
+  ['Exit codes', '0 ok, 1 error, 2 usage, 3 refused, 4 not found.'],
+  ['No prompts', 'Never reads stdin. Destructive commands are dry runs until --yes.'],
+  ['Fix hints', 'Every refusal names the command that resolves it.'],
+  ['Idempotent', 'Run new or hydrate again any time. Same branch, same path.'],
+  ['Parallel-safe', 'A lock per repo serializes concurrent runs.'],
 ];
 ---
 
@@ -133,7 +69,7 @@ const contract = [
     <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
-    <header class="hero">
+    <header class="hero stop">
       <nav class="bar" aria-label="Main">
         <a class="brand" href="/">
           <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -149,11 +85,11 @@ const contract = [
         <a href={repo}>GitHub</a>
       </nav>
 
-      <h1>Worktrees in seconds, not gigabytes.</h1>
+      <h1 class="node filled">Worktrees in seconds, not gigabytes.</h1>
 
-      <div class="pitch">
-        <p>cmw creates git worktrees with dependencies already in place. <code>node_modules</code>, Pods and <code>vendor</code> are copy-on-write clones of your main checkout.</p>
-      </div>
+      <p class="lede">
+        <code>git worktree</code> gives you a second checkout of your repo, but not its <code>node_modules</code>, Pods or <code>.env</code>. cmw brings them over from your main checkout as copy-on-write clones.
+      </p>
 
       <div class="get">
         <div class="command">
@@ -163,135 +99,165 @@ const contract = [
         <a class="docs-link" href="/docs/">Read the docs</a>
       </div>
 
-      <section class="term" aria-label="Example cmw session">
-        <div class="term-bar">
-          <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
-          <div class="tabs" role="tablist" aria-label="Command">
-            {
-              sessions.map((s, index) => (
-                <button
-                  type="button"
-                  role="tab"
-                  id={`tab-${s.id}`}
-                  aria-controls={`panel-${s.id}`}
-                  aria-selected={index === 0 ? 'true' : 'false'}
-                  tabindex={index === 0 ? 0 : -1}
-                  data-tab={s.id}
-                >
-                  cmw {s.id}
-                </button>
-              ))
-            }
-          </div>
+      <figure class="race" aria-label="Setting up a worktree for a project with a 1.4 GB node_modules">
+        <div class="lane slow">
+          <p class="who"><code>git worktree add</code>, then <code>npm install</code></p>
+          <div class="track"><span class="fill"></span></div>
+          <p class="result">Minutes, and 1.4 GB more disk</p>
         </div>
-        {
-          sessions.map((s, index) => (
-            <div class="screen" role="tabpanel" id={`panel-${s.id}`} aria-labelledby={`tab-${s.id}`} hidden={index > 0} tabindex="0">
-              {s.lines.map((l) => <span class={l.cls}>{l.segs.map(([t, c]) => (c ? <span class={c}>{t}</span> : t))}</span>)}
-            </div>
-          ))
-        }
-      </section>
+        <div class="lane fast">
+          <p class="who"><code>cmw new feat/login</code></p>
+          <div class="track"><span class="fill"></span></div>
+          <p class="result"><strong>1.6 s</strong>, almost no extra disk</p>
+        </div>
+        <figcaption>A 1.4 GB node_modules with 107k files, on APFS.</figcaption>
+      </figure>
     </header>
 
     <main>
-      <section class="band stats" aria-label="Numbers">
-        <div>
-          <strong>1.6 s</strong>
-          <p>to clone a 1.4 GB <code>node_modules</code> with 107k files</p>
-        </div>
-        <div>
-          <strong>~0 B</strong>
-          <p>extra disk until a file changes in the worktree</p>
-        </div>
-        <div>
-          <strong>0</strong>
-          <p>installs when the lockfile matches main</p>
-        </div>
-      </section>
-
-      <section class="band hydrate" aria-labelledby="hydrate-title">
-        <h2 id="hydrate-title">Every ignored file lands where it should</h2>
-        <div class="strategies">
+      <section class="stop gaps" aria-labelledby="gaps-title">
+        <h2 id="gaps-title" class="node">A new worktree starts empty</h2>
+        <div class="compare" role="table" aria-label="What a new worktree is missing">
+          <div class="compare-head" role="row">
+            <span role="columnheader"><span class="sr-only">Missing</span></span>
+            <span role="columnheader"><code>git worktree add</code></span>
+            <span role="columnheader"><code>cmw new</code></span>
+          </div>
           {
-            strategies.map((s) => (
-              <article>
-                <h3>
-                  <span class="tag">{s.name}</span>
-                </h3>
-                <p>{s.text}</p>
-                <ul>
-                  {s.examples.map((e) => (
-                    <li>
-                      <code>{e}</code>
-                    </li>
-                  ))}
-                </ul>
-              </article>
+            gaps.map((g) => (
+              <div class="compare-row" role="row">
+                <h3 role="rowheader">{g.missing}</h3>
+                <p class="without" role="cell"><code class="m-label">git worktree add</code>{g.without}</p>
+                <p class="with" role="cell"><code class="m-label">cmw new</code>{g.with}</p>
+              </div>
             ))
           }
         </div>
-        <ul class="stacks" aria-label="Supported tools">
-          {stacks.map((s) => <li>{s}</li>)}
-        </ul>
+      </section>
+
+      <section class="stop cow" aria-labelledby="cow-title">
+        <h2 id="cow-title" class="node">Clones share disk until a file changes</h2>
+        <p class="body">
+          A copy-on-write clone points at the same disk blocks as the original. Ten worktrees with a 1.4 GB <code>node_modules</code> use about 1.4 GB, not 14. Install a package in one of them and only that package takes new space.
+        </p>
+
+        <figure class="blocks" aria-label="Two checkouts pointing at the same disk blocks, with one new block for new-lib">
+          <div class="checkouts">
+            <div class="checkout">
+              <p class="where"><code>~/code/shop</code></p>
+              <p class="dep">node_modules</p>
+            </div>
+            <div class="checkout">
+              <p class="where"><code>{wt}/feat-login</code></p>
+              <p class="dep">node_modules <span class="plus">+ new-lib</span></p>
+            </div>
+          </div>
+          <svg class="wires" viewBox="0 0 100 200" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M0 50 C 50 50, 50 90, 100 90"></path>
+            <path d="M0 150 C 50 150, 50 90, 100 90"></path>
+            <path class="own" d="M0 150 C 60 150, 60 182, 100 182"></path>
+          </svg>
+          <div class="disk">
+            <div class="grid" aria-hidden="true">
+              {Array.from({ length: 40 }, () => <i />)}
+            </div>
+            <p>1.4 GB, stored once</p>
+            <div class="new">
+              <i aria-hidden="true"></i>
+              <p><code>new-lib</code> is the only new data</p>
+            </div>
+          </div>
+        </figure>
+
+        <p class="aside">
+          <code>du</code> and Finder count every clone at full size. cmw measures what it frees from the disk itself. <a href="/docs/disk/">Disk usage</a>
+        </p>
+      </section>
+
+      <section class="stop rules" aria-labelledby="rules-title">
+        <h2 id="rules-title" class="node">Every ignored file gets the right treatment</h2>
+        <p class="body">For each gitignored path in your main checkout, cmw asks one question: does it still work from another folder?</p>
+
+        <div class="tree" role="table" aria-label="How cmw handles ignored files in an example repo">
+          <div class="tree-root" role="row"><code role="cell">shop/</code></div>
+          {
+            tree.map((t, i) => (
+              <div class="tree-row" role="row">
+                <code class="path" role="cell"><span class="branch" aria-hidden="true">{i === tree.length - 1 ? '└─ ' : '├─ '}</span>{t.path}</code>
+                <span class="strategy" role="cell"><span class={`tag ${t.strategy}`}>{t.strategy}</span></span>
+                <span class="why" role="cell">{t.why}</span>
+              </div>
+            ))
+          }
+        </div>
+
+        <p class="body">
+          Then cmw compares each lockfile with main’s. If it matches, nothing installs. If it differs, cmw runs your usual install with npm, pnpm, yarn, bun, Composer, CocoaPods, uv or poetry. Add your own rules in <code>.cmw.toml</code>.
+        </p>
         <a class="more" href="/docs/hydrate/">How hydrate works</a>
       </section>
 
-      <section class="band safe" aria-labelledby="safe-title">
-        <div class="safe-text">
-          <h2 id="safe-title">Cleanup that keeps your work</h2>
-          <ul>
-            <li>Refuses uncommitted changes and unpushed commits unless you pass <code>--force</code>.</li>
-            <li>Deletes a branch only when git, patch IDs or <code>gh</code> prove it merged.</li>
-            <li>Takes the DerivedData, <code>.cxx</code> and build caches with the worktree.</li>
-            <li>Reports space freed from the disk itself, not from <code>du</code>.</li>
+      <section class="stop safe" aria-labelledby="safe-title">
+        <h2 id="safe-title" class="node">Cleanup that keeps your work</h2>
+        <div class="split">
+          <ul class="checks">
+            <li>Refuses to delete uncommitted changes or unpushed commits unless you pass <code>--force</code>.</li>
+            <li>Deletes a branch only when git, patch IDs or <code>gh</code> prove it’s merged.</li>
+            <li>Removes DerivedData, <code>.cxx</code> and build caches along with the worktree.</li>
+            <li><code>cmw gc</code> shows what it would remove. Nothing happens until <code>--yes</code>.</li>
           </ul>
-          <a class="more" href="/docs/cleanup/">Learn the cleanup rules</a>
+          <div class="term" role="region" tabindex="0" aria-label="cmw refusing to remove a worktree with uncommitted changes, then cleaning up merged worktrees">
+            <span class="line"><span class="prompt">$ </span><span class="cmd">cmw rm fix/checkout</span></span>
+            <span class="line err">error: 2 uncommitted changes in {wt}/fix-checkout</span>
+            <span class="line">  fix: cmw rm fix/checkout --force</span>
+            <span class="line gap"><span class="prompt">$ </span><span class="cmd">cmw gc --yes</span></span>
+            <span class="line">removed 1 merged worktree(s):</span>
+            <span class="line">  spike/search  [gh, branch deleted]</span>
+            <span class="line"><span class="ok">freed ~2.1 GB</span> (change in free disk space)</span>
+          </div>
         </div>
-        <div class="term term-solo screen" role="region" tabindex="0" aria-label="cmw refusing to remove a worktree with uncommitted changes">
-          {refused.map((l) => <span class={l.cls}>{l.segs.map(([t, c]) => (c ? <span class={c}>{t}</span> : t))}</span>)}
-        </div>
+        <a class="more" href="/docs/cleanup/">Cleanup rules</a>
       </section>
 
-      <section class="band agents" aria-labelledby="agents-title">
-        <h2 id="agents-title">Built for agents</h2>
-        <div class="agents-grid">
+      <section class="stop agents" aria-labelledby="agents-title">
+        <h2 id="agents-title" class="node">Built for agents</h2>
+        <p class="body">Claude Code, Codex and T3 Code can create, use and remove worktrees with cmw without asking you anything.</p>
+        <div class="split">
           <dl>
             {
               contract.map(([term, text]) => (
                 <div>
-                  <dt>
-                    <code>{term}</code>
-                  </dt>
+                  <dt>{term}</dt>
                   <dd>{text}</dd>
                 </div>
               ))
             }
           </dl>
-          <div class="agents-code">
-            <div class="term term-solo screen" role="region" tabindex="0" aria-label="JSON output of cmw new">
-              {json.map((l) => <span class={l.cls}>{l.segs.map(([t, c]) => (c ? <span class={c}>{t}</span> : t))}</span>)}
+          <div>
+            <div class="term" role="region" tabindex="0" aria-label="JSON output of cmw new">
+              <span class="line"><span class="prompt">$ </span><span class="cmd">cmw new fix/flaky-test --json</span></span>
+              <span class="line">{'{'} "ok": <span class="ok">true</span>, "command": "new",</span>
+              <span class="line">  "data": {'{'}</span>
+              <span class="line">    "path": "{wt}/fix-flaky-test",</span>
+              <span class="line">    "hydrate": {'{'} "ready": <span class="ok">true</span>, "needs_setup": [] {'}'}</span>
+              <span class="line">  {'}'}, "warnings": [] {'}'}</span>
             </div>
-            <div class="teach">
-              <div class="command dark">
-                <code>cmw skill install</code>
-                <button type="button" data-copy="cmw skill install">Copy</button>
-              </div>
-              <p>Installs a Claude Code skill. <code>cmw hook claude</code> routes Claude Code worktrees through cmw.</p>
-            </div>
+            <p class="teach">
+              <code>cmw skill install</code> adds a Claude Code skill. <code>cmw hook claude</code> routes Claude Code’s own worktrees through cmw.
+            </p>
           </div>
         </div>
         <a class="more" href="/docs/agents/">Use cmw with agents</a>
       </section>
     </main>
 
-    <footer class="band end">
-      <h2>Install cmw</h2>
+    <footer class="stop end">
+      <h2 class="node filled">Install cmw</h2>
       <div class="command">
         <code>{brewInstall}</code>
         <button type="button" data-copy={brewInstall}>Copy</button>
       </div>
-      <p>Version {version}. macOS on Apple silicon and Intel. Free and open source under the MIT License.</p>
+      <p>Version {version} for macOS on Apple silicon and Intel. Free and open source under the MIT License.</p>
       <nav aria-label="Footer">
         <a href="/docs/">Docs</a>
         <a href={repo}>GitHub</a>
