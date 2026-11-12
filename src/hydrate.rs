@@ -769,7 +769,7 @@ mod tests {
         fs::create_dir_all(wt.join("node_modules")).unwrap();
         let p = PlannedInstall { installer: fake_installer(), dir: String::new() };
         let mut rec = BTreeMap::new();
-        let mut go = |rec: &mut BTreeMap<String, String>| {
+        let go = |rec: &mut BTreeMap<String, String>| {
             run_install(&ctx(), &main, &wt, &p, InstallFlags::default(), false, rec).status
         };
         assert_eq!(go(&mut rec), "up_to_date");
