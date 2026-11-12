@@ -30,3 +30,13 @@ pub fn print(_agents_md: bool) -> TextReport {
 pub fn hook_claude() -> TextReport {
     todo!("worker C")
 }
+
+/// WorktreeCreate hook: read stdin JSON, create via `crate::new::run`, stdout = worktree path only.
+pub fn hook_claude_create(_ctx: &Ctx, _cwd: &Path) -> Result<TextReport> {
+    todo!("worker C")
+}
+
+/// WorktreeRemove hook: read stdin JSON, remove via `crate::gc::rm` (never --force).
+pub fn hook_claude_remove(_ctx: &Ctx, _cwd: &Path) -> Result<TextReport> {
+    todo!("worker C")
+}

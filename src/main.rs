@@ -61,7 +61,9 @@ fn command_name(c: &Command) -> &'static str {
         Command::ShellInit(_) => "shell-init",
         Command::Skill { command: SkillCommand::Install { .. } } => "skill install",
         Command::Skill { command: SkillCommand::Print { .. } } => "skill print",
-        Command::Hook { .. } => "hook claude",
+        Command::Hook { command: HookCommand::Claude } => "hook claude",
+        Command::Hook { command: HookCommand::ClaudeCreate } => "hook claude-create",
+        Command::Hook { command: HookCommand::ClaudeRemove } => "hook claude-remove",
     }
 }
 
@@ -96,6 +98,7 @@ fn run(cli: Cli) -> i32 {
 
     let mutating = match &cli.command {
         Command::New(_) | Command::Rm(_) => true,
+        Command::Hook { command: HookCommand::ClaudeCreate | HookCommand::ClaudeRemove } => true,
         Command::Hydrate(a) => !a.dry_run,
         Command::Gc(a) => a.yes && !a.all,
         Command::CleanArtifacts(a) => a.yes && !a.all,
@@ -124,5 +127,7 @@ fn run(cli: Cli) -> i32 {
         Command::Skill { command: SkillCommand::Install { dir } } => finish(&ctx, skill::install(&ctx, dir.as_deref())),
         Command::Skill { command: SkillCommand::Print { agents_md } } => finish(&ctx, Ok(skill::print(*agents_md))),
         Command::Hook { command: HookCommand::Claude } => finish(&ctx, Ok(skill::hook_claude())),
+        Command::Hook { command: HookCommand::ClaudeCreate } => finish(&ctx, skill::hook_claude_create(&ctx, &cwd)),
+        Command::Hook { command: HookCommand::ClaudeRemove } => finish(&ctx, skill::hook_claude_remove(&ctx, &cwd)),
     }
 }

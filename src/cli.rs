@@ -218,4 +218,10 @@ pub enum SkillCommand {
 pub enum HookCommand {
     /// Claude Code settings.json hooks that create/remove worktrees through cmw.
     Claude,
+    /// Hook entry point: reads Claude Code's WorktreeCreate JSON on stdin, prints the worktree path.
+    #[command(hide = true)]
+    ClaudeCreate,
+    /// Hook entry point: reads Claude Code's WorktreeRemove JSON on stdin.
+    #[command(hide = true)]
+    ClaudeRemove,
 }

@@ -29,3 +29,23 @@ pub fn scan_roots() -> Vec<PathBuf> {
     }
     out
 }
+
+/// Per-worktree state written by hydrate, stored in the worktree's git dir
+/// (`git rev-parse --git-dir`) so it never appears as an untracked file.
+pub const STATE_FILE: &str = "cmw-state.json";
+
+/// Locate an executable on `$PATH` (like `which`).
+pub fn find_in_path(cmd: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join(cmd)).find(|p| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            p.is_file()
+        }
+    })
+}
