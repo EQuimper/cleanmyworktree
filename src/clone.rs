@@ -18,20 +18,59 @@ pub enum CloneMethod {
 
 /// Clone `src` (file or directory) to `dst`. `dst` must not exist; parent dirs are created.
 pub fn clone_tree(src: &Path, dst: &Path) -> Result<CloneMethod> {
+    clone_tree_inner(src, dst, false)
+}
+
+/// `force_copy` skips clonefile and goes straight to the fallback (used by tests).
+fn clone_tree_inner(src: &Path, dst: &Path, force_copy: bool) -> Result<CloneMethod> {
     if fs::symlink_metadata(dst).is_ok() {
         return Err(CmwError::error(format!("destination already exists: {}", dst.display())));
     }
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    match platform_clone(src, dst) {
+    let attempt = if force_copy {
+        Err(std::io::Error::from_raw_os_error(libc::ENOTSUP))
+    } else {
+        platform_clone(src, dst)
+    };
+    match attempt {
         Ok(()) => Ok(CloneMethod::Clonefile),
         Err(e) if is_fallback_errno(&e) => {
-            copy_recursive(src, dst)?;
+            copy_atomic(src, dst)?;
             Ok(CloneMethod::Copy)
         }
-        Err(e) => Err(CmwError::error(format!("clone {} -> {} failed: {e}", src.display(), dst.display()))),
+        Err(e) => {
+            // clonefile is atomic, but never leave a destination that later reads as `exists`.
+            remove_any(dst);
+            Err(CmwError::error(format!("clone {} -> {} failed: {e}", src.display(), dst.display())))
+        }
     }
+}
+
+fn remove_any(path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => {
+            let _ = fs::remove_dir_all(path);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(path);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Copy into a temporary sibling, then rename onto `dst`, so an interrupted copy never leaves
+/// a partial `dst` behind (the next hydrate would report it as `exists` forever).
+fn copy_atomic(src: &Path, dst: &Path) -> Result<()> {
+    let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = dst.with_file_name(format!(".{name}.cmw-partial-{}", std::process::id()));
+    remove_any(&tmp);
+    if let Err(e) = copy_recursive(src, &tmp).and_then(|()| fs::rename(&tmp, dst).map_err(Into::into)) {
+        remove_any(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -66,11 +105,12 @@ pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     }
     if meta.is_dir() {
         fs::create_dir_all(dst)?;
-        fs::set_permissions(dst, meta.permissions())?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
             copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
         }
+        // Last, so a read-only source dir does not block writing its own children.
+        fs::set_permissions(dst, meta.permissions())?;
         return Ok(());
     }
     fs::copy(src, dst)?;
@@ -129,5 +169,32 @@ mod tests {
         fs::write(src.join("x/y"), "1").unwrap();
         copy_recursive(&src, &tmp.path().join("d")).unwrap();
         assert_eq!(fs::read_to_string(tmp.path().join("d/x/y")).unwrap(), "1");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_fallback_copy_leaves_no_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("s");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a"), "1").unwrap();
+        fs::write(src.join("secret"), "2").unwrap();
+        fs::set_permissions(src.join("secret"), fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(src.join("secret")).is_ok() {
+            return; // running as root: chmod 000 does not block reads
+        }
+        let out = tmp.path().join("out");
+        let dst = out.join("d");
+        let res = clone_tree_inner(&src, &dst, true);
+        fs::set_permissions(src.join("secret"), fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(res.is_err());
+        assert!(fs::symlink_metadata(&dst).is_err(), "partial destination left behind");
+        let leftovers: Vec<_> = fs::read_dir(&out).unwrap().flatten().collect();
+        assert!(leftovers.is_empty(), "temp dir not cleaned: {leftovers:?}");
+
+        // Retry after fixing the source succeeds and renames into place.
+        assert_eq!(clone_tree_inner(&src, &dst, true).unwrap(), CloneMethod::Copy);
+        assert_eq!(fs::read_to_string(dst.join("secret")).unwrap(), "2");
     }
 }
