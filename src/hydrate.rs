@@ -171,6 +171,18 @@ pub fn hydrate(
     let mut needs_setup = Vec::new();
 
     let mut state = read_state(target);
+    // A provenance record only describes a dep dir that exists. Drop records whose dep dir is
+    // missing *before* anything can repopulate it (a clone from main below, or an installer) and
+    // persist that, so neither `--no-install` nor a crash mid-hydrate can leave a stale claim.
+    if !dry_run {
+        let before = state.installs.len();
+        state
+            .installs
+            .retain(|key, _| record_dep_present(target, key));
+        if state.installs.len() != before {
+            write_state(target, source, state.raw.clone(), &state.installs)?;
+        }
+    }
     // Repo-relative paths populated from the source in this run.
     let mut cloned_now: HashSet<String> = HashSet::new();
 
@@ -450,6 +462,20 @@ fn parent_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(p, _)| p)
 }
 
+/// Whether the dep dir described by a provenance key (`<dir>|<lockfile>`) exists in `target`.
+/// Unknown keys and installers without a dep dir are kept only when they can still be meaningful.
+fn record_dep_present(target: &Path, key: &str) -> bool {
+    let Some((dir, lockfile)) = key.split_once('|') else {
+        return false;
+    };
+    match rules::installers().iter().find(|i| i.lockfile == lockfile) {
+        Some(inst) => inst
+            .dep_dir
+            .is_none_or(|d| target.join(join_rel(dir, d)).exists()),
+        None => false,
+    }
+}
+
 fn join_rel(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_string()
@@ -659,7 +685,16 @@ fn run_install(
     // leave no claim that they match any lockfile.
     recorded.remove(&key);
     if let Err(e) = persist(recorded) {
-        ctx.warn(format!("could not update hydrate state: {e}"));
+        // Without a durable record removal, a failed install could leave the old record claiming
+        // the (now modified) deps still match. Never mutate deps we can't account for.
+        item.status = "failed";
+        let reason = format!(
+            "could not update hydrate state before installing: {}",
+            e.message
+        );
+        ctx.warn(format!("{}: {reason}", item.command));
+        item.reason = Some(reason);
+        return item;
     }
     ctx.progress(format!("running: {}", item.command));
     let out = Command::new(inst.command[0])
@@ -1232,5 +1267,52 @@ mod tests {
         // Second run is idempotent.
         let r2 = hydrate(&ctx(), &main, &wt, false, flags).unwrap();
         assert_eq!(action(&r2, ".claude/settings.local.json"), "exists");
+    }
+
+    #[test]
+    fn no_install_reclone_drops_stale_record() {
+        let (_tmp, main, wt, _p) = lock_fixture("A");
+        fs::create_dir_all(main.join("node_modules")).unwrap();
+        fs::write(main.join("node_modules/v"), "A").unwrap();
+        // The worktree moved its lock to B, installed and recorded B, then node_modules was deleted.
+        fs::write(wt.join("package-lock.json"), "B").unwrap();
+        let mut rec = BTreeMap::new();
+        rec.insert(
+            "|package-lock.json".to_string(),
+            hash_file(&wt.join("package-lock.json")).unwrap(),
+        );
+        write_state(&wt, &main, Default::default(), &rec).unwrap();
+        let flags = InstallFlags {
+            no_install: true,
+            no_slow: false,
+        };
+        hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert_eq!(fs::read_to_string(wt.join("node_modules/v")).unwrap(), "A");
+        assert!(
+            read_state(&wt).installs.is_empty(),
+            "the B record must not survive a re-clone of A deps"
+        );
+    }
+
+    #[test]
+    fn persist_failure_blocks_installer() {
+        let (_tmp, main, wt, _) = lock_fixture("A");
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
+        let marker = wt.join("installer-ran");
+        let script: &'static str =
+            Box::leak(format!("touch '{}'", marker.display()).into_boxed_str());
+        let p = PlannedInstall {
+            installer: scripted(script),
+            dir: String::new(),
+        };
+        let mut rec = BTreeMap::new();
+        let fail = |_: &BTreeMap<String, String>| Err(CmwError::error("state is read-only"));
+        let cloned = HashSet::new();
+        let r = run_install(&env(&main, &wt, &cloned, &fail), &p, &mut rec);
+        assert_eq!(r.status, "failed");
+        assert!(
+            !marker.exists(),
+            "the installer must not run when record removal can't be persisted"
+        );
     }
 }
