@@ -17,9 +17,14 @@ pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
         .map_err(|e| CmwError::error(format!("failed to run git: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(CmwError::error(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(CmwError::error(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches(['\n', '\r']).to_string())
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .trim_end_matches(['\n', '\r'])
+        .to_string())
 }
 
 /// Run git, returning raw stdout bytes (for `-z` output).
@@ -33,7 +38,10 @@ pub fn run_raw(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .map_err(|e| CmwError::error(format!("failed to run git: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(CmwError::error(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(CmwError::error(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
     Ok(out.stdout)
 }
@@ -61,9 +69,12 @@ pub fn toplevel(cwd: &Path) -> Result<PathBuf> {
 
 /// Shared `.git` directory for all worktrees of the repo (absolute).
 pub fn common_dir(cwd: &Path) -> Result<PathBuf> {
-    run(cwd, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .map(PathBuf::from)
-        .map_err(|_| CmwError::not_found(format!("not inside a git repository: {}", cwd.display())))
+    run(
+        cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(PathBuf::from)
+    .map_err(|_| CmwError::not_found(format!("not inside a git repository: {}", cwd.display())))
 }
 
 /// Per-worktree git directory (absolute), e.g. `.git/worktrees/<name>`. cmw keeps its
@@ -145,14 +156,21 @@ pub fn list_worktrees(cwd: &Path) -> Result<Vec<Worktree>> {
 
 /// The main checkout, used as the hydrate source. None for bare repositories.
 pub fn main_worktree(cwd: &Path) -> Result<Option<Worktree>> {
-    Ok(list_worktrees(cwd)?.into_iter().find(|w| w.is_main && !w.bare))
+    Ok(list_worktrees(cwd)?
+        .into_iter()
+        .find(|w| w.is_main && !w.bare))
 }
 
 /// Find a worktree by path, branch name, branch slug, or directory name.
 pub fn resolve_worktree(cwd: &Path, query: &str) -> Result<Worktree> {
     let wts = list_worktrees(cwd)?;
     let as_path = Path::new(query);
-    let canon = std::fs::canonicalize(if as_path.is_absolute() { as_path.to_path_buf() } else { cwd.join(as_path) }).ok();
+    let canon = std::fs::canonicalize(if as_path.is_absolute() {
+        as_path.to_path_buf()
+    } else {
+        cwd.join(as_path)
+    })
+    .ok();
     for wt in &wts {
         let wt_canon = std::fs::canonicalize(&wt.path).unwrap_or_else(|_| wt.path.clone());
         if canon.as_ref() == Some(&wt_canon) || wt.path == as_path {
@@ -169,24 +187,44 @@ pub fn resolve_worktree(cwd: &Path, query: &str) -> Result<Worktree> {
         .collect();
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
-        [] => Err(CmwError::not_found(format!("no worktree matches '{query}'")).with_hint("cmw ls")),
+        [] => {
+            Err(CmwError::not_found(format!("no worktree matches '{query}'")).with_hint("cmw ls"))
+        }
         many => Err(CmwError::usage(format!(
             "'{query}' matches {} worktrees; pass a path instead: {}",
             many.len(),
-            many.iter().map(|w| w.path.display().to_string()).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|w| w.path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     }
 }
 
 /// Default branch name (e.g. `main`), from origin/HEAD, else main/master, else the main checkout's branch.
 pub fn default_branch(cwd: &Path) -> Result<String> {
-    if let Ok(r) = run(cwd, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
-        && let Some(b) = r.strip_prefix("origin/")
+    if let Ok(r) = run(
+        cwd,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    ) && let Some(b) = r.strip_prefix("origin/")
     {
         return Ok(b.to_string());
     }
     for b in ["main", "master"] {
-        if run_ok(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")]) {
+        if run_ok(
+            cwd,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{b}"),
+            ],
+        ) {
             return Ok(b.to_string());
         }
     }
@@ -198,7 +236,17 @@ pub fn default_branch(cwd: &Path) -> Result<String> {
 /// Ignored, untracked entries under `root`, relative to it. Fully ignored directories are
 /// reported once with a trailing `/` (git's `--directory` collapsing), files without.
 pub fn ignored_entries(root: &Path) -> Result<Vec<String>> {
-    let raw = run_raw(root, &["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])?;
+    let raw = run_raw(
+        root,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+    )?;
     Ok(String::from_utf8_lossy(&raw)
         .split('\0')
         .filter(|s| !s.is_empty())

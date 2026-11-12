@@ -45,7 +45,11 @@ pub struct CmwError {
 
 impl CmwError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), hint: None }
+        Self {
+            kind,
+            message: message.into(),
+            hint: None,
+        }
     }
     pub fn error(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Error, message)
@@ -54,7 +58,11 @@ impl CmwError {
         Self::new(ErrorKind::Usage, message)
     }
     pub fn refused(message: impl Into<String>, hint: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Refused, message: message.into(), hint: Some(hint.into()) }
+        Self {
+            kind: ErrorKind::Refused,
+            message: message.into(),
+            hint: Some(hint.into()),
+        }
     }
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::NotFound, message)
@@ -73,7 +81,11 @@ impl fmt::Display for CmwError {
 
 impl From<std::io::Error> for CmwError {
     fn from(e: std::io::Error) -> Self {
-        let kind = if e.kind() == std::io::ErrorKind::NotFound { ErrorKind::NotFound } else { ErrorKind::Error };
+        let kind = if e.kind() == std::io::ErrorKind::NotFound {
+            ErrorKind::NotFound
+        } else {
+            ErrorKind::Error
+        };
         CmwError::new(kind, e.to_string())
     }
 }
@@ -100,7 +112,11 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(json: bool, command: &'static str) -> Self {
-        Self { json, command, warnings: RefCell::new(Vec::new()) }
+        Self {
+            json,
+            command,
+            warnings: RefCell::new(Vec::new()),
+        }
     }
 
     /// Non-fatal problem. Printed to stderr immediately in human mode, collected in JSON mode.
@@ -127,7 +143,10 @@ impl Ctx {
                 "data": report,
                 "warnings": *self.warnings.borrow(),
             });
-            println!("{}", serde_json::to_string_pretty(&doc).expect("serializable report"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&doc).expect("serializable report")
+            );
         } else {
             let text = report.human();
             if !text.is_empty() {
@@ -145,7 +164,10 @@ impl Ctx {
                 "error": err,
                 "warnings": *self.warnings.borrow(),
             });
-            println!("{}", serde_json::to_string_pretty(&doc).expect("serializable error"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&doc).expect("serializable error")
+            );
         } else {
             eprintln!("error: {}", err.message);
             if let Some(hint) = &err.hint {
@@ -165,12 +187,19 @@ pub fn human_bytes(bytes: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{bytes} B") } else { format!("{v:.1} {}", UNITS[i]) }
+    if i == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{v:.1} {}", UNITS[i])
+    }
 }
 
 /// Shell-quote a path for hint commands.
 pub fn sh_quote(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@+".contains(c)) {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@+".contains(c))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))

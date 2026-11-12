@@ -148,7 +148,9 @@ impl RuleSet {
     pub fn new(user: Vec<Rule>) -> Result<Self, String> {
         let mut rules = Vec::new();
         for r in user.into_iter().chain(builtin()) {
-            let m = Glob::new(&r.pattern).map_err(|e| format!("invalid rule pattern '{}': {e}", r.pattern))?.compile_matcher();
+            let m = Glob::new(&r.pattern)
+                .map_err(|e| format!("invalid rule pattern '{}': {e}", r.pattern))?
+                .compile_matcher();
             rules.push((r, m));
         }
         Ok(Self { rules })
@@ -195,28 +197,94 @@ pub fn installers() -> &'static [Installer] {
         dep_dir: Option<&'static str>,
         slow: bool,
     ) -> Installer {
-        Installer { ecosystem, lockfile, command, dep_dir, slow }
+        Installer {
+            ecosystem,
+            lockfile,
+            command,
+            dep_dir,
+            slow,
+        }
     }
     static LIST: &[Installer] = &[
-        i("node", "package-lock.json", &["npm", "install", "--no-audit", "--no-fund"], Some("node_modules"), false),
-        i("node", "pnpm-lock.yaml", &["pnpm", "install", "--prefer-offline"], Some("node_modules"), false),
-        i("node", "yarn.lock", &["yarn", "install"], Some("node_modules"), false),
-        i("node", "bun.lock", &["bun", "install"], Some("node_modules"), false),
-        i("node", "bun.lockb", &["bun", "install"], Some("node_modules"), false),
-        i("php", "composer.lock", &["composer", "install", "--no-interaction"], Some("vendor"), false),
-        i("ios", "Podfile.lock", &["pod", "install"], Some("Pods"), true),
+        i(
+            "node",
+            "package-lock.json",
+            &["npm", "install", "--no-audit", "--no-fund"],
+            Some("node_modules"),
+            false,
+        ),
+        i(
+            "node",
+            "pnpm-lock.yaml",
+            &["pnpm", "install", "--prefer-offline"],
+            Some("node_modules"),
+            false,
+        ),
+        i(
+            "node",
+            "yarn.lock",
+            &["yarn", "install"],
+            Some("node_modules"),
+            false,
+        ),
+        i(
+            "node",
+            "bun.lock",
+            &["bun", "install"],
+            Some("node_modules"),
+            false,
+        ),
+        i(
+            "node",
+            "bun.lockb",
+            &["bun", "install"],
+            Some("node_modules"),
+            false,
+        ),
+        i(
+            "php",
+            "composer.lock",
+            &["composer", "install", "--no-interaction"],
+            Some("vendor"),
+            false,
+        ),
+        i(
+            "ios",
+            "Podfile.lock",
+            &["pod", "install"],
+            Some("Pods"),
+            true,
+        ),
         i("python", "uv.lock", &["uv", "sync"], Some(".venv"), false),
-        i("python", "poetry.lock", &["poetry", "install", "--no-interaction"], Some(".venv"), false),
+        i(
+            "python",
+            "poetry.lock",
+            &["poetry", "install", "--no-interaction"],
+            Some(".venv"),
+            false,
+        ),
         i("ruby", "Gemfile.lock", &["bundle", "install"], None, false),
-        i("flutter", "pubspec.lock", &["flutter", "pub", "get"], Some(".dart_tool"), false),
+        i(
+            "flutter",
+            "pubspec.lock",
+            &["flutter", "pub", "get"],
+            Some(".dart_tool"),
+            false,
+        ),
     ];
     LIST
 }
 
 /// Files whose content decides whether a cloned Expo/RN native project (ios/, android/) is
 /// still valid. Hashed relative to the native dir's parent.
-pub const NATIVE_STAMP_FILES: &[&str] =
-    &["app.json", "app.config.js", "app.config.ts", "app.config.mjs", "app.config.cjs", "package.json"];
+pub const NATIVE_STAMP_FILES: &[&str] = &[
+    "app.json",
+    "app.config.js",
+    "app.config.ts",
+    "app.config.mjs",
+    "app.config.cjs",
+    "package.json",
+];
 
 #[cfg(test)]
 mod tests {

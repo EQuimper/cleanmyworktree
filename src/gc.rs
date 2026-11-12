@@ -49,7 +49,11 @@ fn canonical(p: &Path) -> PathBuf {
 }
 
 fn delete_path(p: &Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(p)?.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) }
+    if std::fs::symlink_metadata(p)?.is_dir() {
+        std::fs::remove_dir_all(p)
+    } else {
+        std::fs::remove_file(p)
+    }
 }
 
 enum Evicted {
@@ -64,12 +68,23 @@ static TRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 fn evict(path: &Path, trash: &Path) -> Result<Evicted> {
     let _ = std::fs::create_dir_all(trash);
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("dir");
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dest = trash.join(format!("{}-{}-{}-{}", std::process::id(), nanos, TRASH_SEQ.fetch_add(1, Ordering::Relaxed), name));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dest = trash.join(format!(
+        "{}-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        TRASH_SEQ.fetch_add(1, Ordering::Relaxed),
+        name
+    ));
     match std::fs::rename(path, &dest) {
         Ok(()) => Ok(Evicted::Trashed(dest)),
         Err(_) => {
-            std::fs::remove_dir_all(path).map_err(|e| CmwError::error(format!("could not delete {}: {e}", path.display())))?;
+            std::fs::remove_dir_all(path).map_err(|e| {
+                CmwError::error(format!("could not delete {}: {e}", path.display()))
+            })?;
             Ok(Evicted::Deleted)
         }
     }
@@ -77,7 +92,9 @@ fn evict(path: &Path, trash: &Path) -> Result<Evicted> {
 
 /// Finish an eviction: delete the trashed dir synchronously, or hand it to a detached `rm -rf`.
 fn finish_evict(e: Evicted, sync: bool) -> Result<()> {
-    let Evicted::Trashed(dir) = e else { return Ok(()) };
+    let Evicted::Trashed(dir) = e else {
+        return Ok(());
+    };
     if !sync {
         use std::os::unix::process::CommandExt;
         let spawned = Command::new("rm")
@@ -92,7 +109,8 @@ fn finish_evict(e: Evicted, sync: bool) -> Result<()> {
             return Ok(());
         }
     }
-    std::fs::remove_dir_all(&dir).map_err(|e| CmwError::error(format!("could not delete {}: {e}", dir.display())))
+    std::fs::remove_dir_all(&dir)
+        .map_err(|e| CmwError::error(format!("could not delete {}: {e}", dir.display())))
 }
 
 /// Free bytes on the volumes holding `probe_paths`, to measure what a deletion really freed
@@ -120,15 +138,21 @@ impl FreeProbe {
         let mut v: Vec<(u64, PathBuf, u64)> = Vec::new();
         for p in paths {
             if let Some((dev, free)) = Self::avail(p)
-                && !v.iter().any(|(d, _, _)| *d == dev) {
-                    v.push((dev, p.to_path_buf(), free));
-                }
+                && !v.iter().any(|(d, _, _)| *d == dev)
+            {
+                v.push((dev, p.to_path_buf(), free));
+            }
         }
         Self(v)
     }
 
     fn freed(&self) -> u64 {
-        self.0.iter().filter_map(|(_, p, before)| Self::avail(p).map(|(_, after)| after.saturating_sub(*before))).sum()
+        self.0
+            .iter()
+            .filter_map(|(_, p, before)| {
+                Self::avail(p).map(|(_, after)| after.saturating_sub(*before))
+            })
+            .sum()
     }
 }
 
@@ -143,7 +167,11 @@ struct DdEntry {
 }
 
 fn xml_unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 fn workspace_path(plist: &Path) -> Option<PathBuf> {
@@ -171,13 +199,18 @@ fn workspace_path(plist: &Path) -> Option<PathBuf> {
 }
 
 fn scan_derived_data(root: &Path) -> Vec<DdEntry> {
-    let Ok(rd) = std::fs::read_dir(root) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
     let mut out: Vec<DdEntry> = rd
         .flatten()
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .filter_map(|e| {
             let plist = e.path().join("info.plist");
-            plist.is_file().then(|| DdEntry { dir: e.path(), workspace: workspace_path(&plist) })
+            plist.is_file().then(|| DdEntry {
+                dir: e.path(),
+                workspace: workspace_path(&plist),
+            })
         })
         .collect();
     out.sort_by(|a, b| a.dir.cmp(&b.dir));
@@ -189,14 +222,22 @@ fn dd_for_worktree(entries: &[DdEntry], wt_path: &Path) -> Vec<PathBuf> {
     let canon = canonical(wt_path);
     entries
         .iter()
-        .filter(|e| e.workspace.as_ref().is_some_and(|w| w.starts_with(wt_path) || w.starts_with(&canon)))
+        .filter(|e| {
+            e.workspace
+                .as_ref()
+                .is_some_and(|w| w.starts_with(wt_path) || w.starts_with(&canon))
+        })
         .map(|e| e.dir.clone())
         .collect()
 }
 
 /// DerivedData folders whose workspace no longer exists.
 fn dd_orphans(entries: &[DdEntry]) -> Vec<PathBuf> {
-    entries.iter().filter(|e| e.workspace.as_ref().is_some_and(|w| !w.exists())).map(|e| e.dir.clone()).collect()
+    entries
+        .iter()
+        .filter(|e| e.workspace.as_ref().is_some_and(|w| !w.exists()))
+        .map(|e| e.dir.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -204,7 +245,10 @@ fn dd_orphans(entries: &[DdEntry]) -> Vec<PathBuf> {
 // ---------------------------------------------------------------------------------------------
 
 fn repo_cwd(wts: &[Worktree], common: &Path) -> PathBuf {
-    wts.iter().find(|w| w.is_main && !w.bare && w.path.is_dir()).map(|w| w.path.clone()).unwrap_or_else(|| common.to_path_buf())
+    wts.iter()
+        .find(|w| w.is_main && !w.bare && w.path.is_dir())
+        .map(|w| w.path.clone())
+        .unwrap_or_else(|| common.to_path_buf())
 }
 
 struct RemoveOpts {
@@ -244,10 +288,17 @@ fn resolve_admin(repo_cwd: &Path, wt_path: &Path) -> Option<PathBuf> {
         let g = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
         Some(if g.is_absolute() { g } else { wt_path.join(g) })
     } else {
-        std::fs::read_dir(&worktrees).ok()?.flatten().map(|e| e.path()).find(|p| points_back(p))
+        std::fs::read_dir(&worktrees)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| points_back(p))
     }?;
     let admin = canonical(&candidate);
-    (admin.parent() == Some(worktrees.as_path()) && points_back(&admin) && !admin.join("locked").exists()).then_some(admin)
+    (admin.parent() == Some(worktrees.as_path())
+        && points_back(&admin)
+        && !admin.join("locked").exists())
+    .then_some(admin)
 }
 
 /// Delete exactly one resolved admin dir. Never runs a repo-wide `git worktree prune`.
@@ -264,14 +315,25 @@ fn drop_admin_dir(ctx: &Ctx, admin: Option<PathBuf>, wt_path: &Path) -> &'static
     "deferred"
 }
 
-fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntry], trash: &Path, o: &RemoveOpts) -> Result<Removal> {
+fn remove_worktree(
+    ctx: &Ctx,
+    repo_cwd: &Path,
+    st: &WorktreeStatus,
+    dd: &[DdEntry],
+    trash: &Path,
+    o: &RemoveOpts,
+) -> Result<Removal> {
     let derived_data = dd_for_worktree(dd, &st.path);
     let (delete_branch, kept) = match &st.branch {
         None => (false, Some("detached HEAD: there is no branch".to_string())),
         Some(_) if o.keep_branch => (false, Some("--keep-branch".to_string())),
-        Some(_) if st.merged != Some(true) => {
-            (false, Some(format!("not known to be merged ({}); its commits stay recoverable on the branch", st.merge_reason)))
-        }
+        Some(_) if st.merged != Some(true) => (
+            false,
+            Some(format!(
+                "not known to be merged ({}); its commits stay recoverable on the branch",
+                st.merge_reason
+            )),
+        ),
         Some(_) => (true, None),
     };
     let exists = st.path.is_dir();
@@ -323,12 +385,21 @@ fn remove_worktree(ctx: &Ctx, repo_cwd: &Path, st: &WorktreeStatus, dd: &[DdEntr
         match git::run(repo_cwd, &["branch", "-D", b]) {
             Ok(_) => branch_deleted = true,
             Err(e) => {
-                ctx.warn(format!("worktree removed but branch {b} was kept: {}", e.message));
+                ctx.warn(format!(
+                    "worktree removed but branch {b} was kept: {}",
+                    e.message
+                ));
                 branch_kept_reason = Some(e.message);
             }
         }
     }
-    Ok(Removal { derived_data, watchman, branch_deleted, branch_kept_reason, admin_cleanup })
+    Ok(Removal {
+        derived_data,
+        watchman,
+        branch_deleted,
+        branch_kept_reason,
+        admin_cleanup,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -352,11 +423,25 @@ pub struct RmReport {
 
 impl Report for RmReport {
     fn human(&self) -> String {
-        let verb = if self.dry_run { "would remove" } else { "removed" };
+        let verb = if self.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        };
         let mut s = format!("{verb} {}", self.path.display());
         match (&self.branch, self.branch_deleted) {
-            (Some(b), true) => s.push_str(&format!("\n  branch {b}: {}", if self.dry_run { "would delete" } else { "deleted" })),
-            (Some(b), false) => s.push_str(&format!("\n  branch {b}: kept ({})", self.branch_kept_reason.as_deref().unwrap_or("-"))),
+            (Some(b), true) => s.push_str(&format!(
+                "\n  branch {b}: {}",
+                if self.dry_run {
+                    "would delete"
+                } else {
+                    "deleted"
+                }
+            )),
+            (Some(b), false) => s.push_str(&format!(
+                "\n  branch {b}: kept ({})",
+                self.branch_kept_reason.as_deref().unwrap_or("-")
+            )),
             _ => {}
         }
         for d in &self.derived_data_removed {
@@ -374,35 +459,54 @@ fn rm_impl(ctx: &Ctx, cwd: &Path, args: &RmArgs, env: &Env) -> Result<RmReport> 
     let wt = git::resolve_worktree(cwd, &args.name)?;
     let p = wt.path.display().to_string();
     if wt.is_main || wt.bare {
-        return Err(CmwError::refused(format!("{p} is the main checkout; cmw never removes it"), "cmw ls"));
+        return Err(CmwError::refused(
+            format!("{p} is the main checkout; cmw never removes it"),
+            "cmw ls",
+        ));
     }
     if wt.locked {
-        return Err(CmwError::refused(format!("{p} is locked"), format!("git worktree unlock {}", sh_quote(&p))));
+        return Err(CmwError::refused(
+            format!("{p} is locked"),
+            format!("git worktree unlock {}", sh_quote(&p)),
+        ));
     }
     let wts = git::list_worktrees(cwd)?;
     let common = git::common_dir(cwd)?;
     let repo = repo_cwd(&wts, &common);
     let default = git::default_branch(&repo).unwrap_or_else(|_| "main".to_string());
-    let opts = StatusOpts { sizes: false, use_gh: env.use_gh };
+    let opts = StatusOpts {
+        sizes: false,
+        use_gh: env.use_gh,
+    };
     let st = inventory::status(ctx, &repo, &wt, &default, &opts, &mut GhCache::default());
     let force_hint = format!("cmw rm {} --force", sh_quote(&args.name));
 
     if !args.force {
         if st.prunable && st.path.is_dir() {
             return Err(CmwError::refused(
-                format!("{p}: worktree link is broken (.git file missing); cmw cannot verify uncommitted work. Repair it, or pass --force to remove it anyway"),
+                format!(
+                    "{p}: worktree link is broken (.git file missing); cmw cannot verify uncommitted work. Repair it, or pass --force to remove it anyway"
+                ),
                 format!("git worktree repair {}", sh_quote(&p)),
             ));
         }
         if let Some(e) = &st.error {
-            return Err(CmwError::refused(format!("could not inspect {p}: {e}"), force_hint));
+            return Err(CmwError::refused(
+                format!("could not inspect {p}: {e}"),
+                force_hint,
+            ));
         }
         if st.dirty > 0 {
-            return Err(CmwError::refused(format!("{} uncommitted changes in {p}", st.dirty), force_hint));
+            return Err(CmwError::refused(
+                format!("{} uncommitted changes in {p}", st.dirty),
+                force_hint,
+            ));
         }
         if st.has_submodules {
             return Err(CmwError::refused(
-                format!("{p}: worktree has initialized submodules; cmw cannot verify their unpushed commits. Pass --force to remove it anyway"),
+                format!(
+                    "{p}: worktree has initialized submodules; cmw cannot verify their unpushed commits. Pass --force to remove it anyway"
+                ),
                 force_hint,
             ));
         }
@@ -412,14 +516,28 @@ fn rm_impl(ctx: &Ctx, cwd: &Path, args: &RmArgs, env: &Env) -> Result<RmReport> 
                 None => format!("git -C {} switch -c rescue", sh_quote(&p)),
             };
             return Err(CmwError::refused(
-                format!("{} unpushed commits in {p} that are not merged into {default}; push them first, or pass --force to discard", st.unpushed),
+                format!(
+                    "{} unpushed commits in {p} that are not merged into {default}; push them first, or pass --force to discard",
+                    st.unpushed
+                ),
                 hint,
             ));
         }
     }
 
     let dd = scan_derived_data(&env.dd_root);
-    let r = remove_worktree(ctx, &repo, &st, &dd, &env.trash, &RemoveOpts { dry_run: args.dry_run, sync: false, keep_branch: args.keep_branch })?;
+    let r = remove_worktree(
+        ctx,
+        &repo,
+        &st,
+        &dd,
+        &env.trash,
+        &RemoveOpts {
+            dry_run: args.dry_run,
+            sync: false,
+            keep_branch: args.keep_branch,
+        },
+    )?;
     Ok(RmReport {
         path: wt.path,
         branch: wt.branch,
@@ -498,40 +616,98 @@ pub struct GcReport {
 impl Report for GcReport {
     fn human(&self) -> String {
         let mut s: Vec<String> = Vec::new();
-        let (items, verb) = if self.dry_run { (&self.would_remove, "would remove") } else { (&self.removed, "removed") };
+        let (items, verb) = if self.dry_run {
+            (&self.would_remove, "would remove")
+        } else {
+            (&self.removed, "removed")
+        };
         if !items.is_empty() {
             s.push(format!("{verb} {} merged worktree(s):", items.len()));
             for i in items {
                 let b = i.branch.as_deref().unwrap_or("(detached)");
                 let via = i.merged_via.as_deref().unwrap_or("-");
-                let del = if i.branch_deleted { ", branch deleted" } else { "" };
+                let del = if i.branch_deleted {
+                    ", branch deleted"
+                } else {
+                    ""
+                };
                 s.push(format!("  {b}  [{via}{del}]  {}", i.path.display()));
             }
         }
         if !self.pruned.is_empty() {
-            s.push(format!("{} {} worktree entr(ies) whose directory is missing:", if self.dry_run { "would prune" } else { "pruned" }, self.pruned.len()));
-            s.extend(self.pruned.iter().map(|p| format!("  {}  [{}]", p.path.display(), p.outcome)));
+            s.push(format!(
+                "{} {} worktree entr(ies) whose directory is missing:",
+                if self.dry_run {
+                    "would prune"
+                } else {
+                    "pruned"
+                },
+                self.pruned.len()
+            ));
+            s.extend(
+                self.pruned
+                    .iter()
+                    .map(|p| format!("  {}  [{}]", p.path.display(), p.outcome)),
+            );
         }
         if !self.derived_data.is_empty() {
-            s.push(format!("{} {} DerivedData folder(s):", if self.dry_run { "would delete" } else { "deleted" }, self.derived_data.len()));
-            s.extend(self.derived_data.iter().map(|p| format!("  {}", p.display())));
+            s.push(format!(
+                "{} {} DerivedData folder(s):",
+                if self.dry_run {
+                    "would delete"
+                } else {
+                    "deleted"
+                },
+                self.derived_data.len()
+            ));
+            s.extend(
+                self.derived_data
+                    .iter()
+                    .map(|p| format!("  {}", p.display())),
+            );
         }
         if !self.stale.is_empty() {
             s.push("stale (not merged; never removed automatically):".to_string());
-            s.extend(self.stale.iter().map(|i| format!("  {}  idle {}d  {}", i.branch.as_deref().unwrap_or("(detached)"), i.idle_days, i.path.display())));
+            s.extend(self.stale.iter().map(|i| {
+                format!(
+                    "  {}  idle {}d  {}",
+                    i.branch.as_deref().unwrap_or("(detached)"),
+                    i.idle_days,
+                    i.path.display()
+                )
+            }));
         }
         if !self.orphans.is_empty() {
-            s.push("orphans (directories not registered as worktrees; never deleted automatically):".to_string());
-            s.extend(self.orphans.iter().map(|o| format!("  {}  ->  {}", o.path.display(), o.hint)));
+            s.push(
+                "orphans (directories not registered as worktrees; never deleted automatically):"
+                    .to_string(),
+            );
+            s.extend(
+                self.orphans
+                    .iter()
+                    .map(|o| format!("  {}  ->  {}", o.path.display(), o.hint)),
+            );
         }
         if !self.skipped.is_empty() {
             s.push("skipped:".to_string());
-            s.extend(self.skipped.iter().map(|i| format!("  {}  {}  ({})", i.branch.as_deref().unwrap_or("(detached)"), i.path.display(), i.reason)));
+            s.extend(self.skipped.iter().map(|i| {
+                format!(
+                    "  {}  {}  ({})",
+                    i.branch.as_deref().unwrap_or("(detached)"),
+                    i.path.display(),
+                    i.reason
+                )
+            }));
         }
-        let actionable = !self.would_remove.is_empty() || !self.pruned.is_empty() || !self.derived_data.is_empty();
+        let actionable = !self.would_remove.is_empty()
+            || !self.pruned.is_empty()
+            || !self.derived_data.is_empty();
         if self.dry_run {
             if actionable {
-                s.push(format!("run: cmw gc --yes{}", if self.all { " --all" } else { "" }));
+                s.push(format!(
+                    "run: cmw gc --yes{}",
+                    if self.all { " --all" } else { "" }
+                ));
             } else if s.is_empty() {
                 s.push("nothing to clean up".to_string());
             }
@@ -540,7 +716,10 @@ impl Report for GcReport {
                 s.push("nothing to clean up".to_string());
             }
             if let Some(b) = self.freed_bytes {
-                s.push(format!("freed ~{} (change in free disk space)", human_bytes(b)));
+                s.push(format!(
+                    "freed ~{} (change in free disk space)",
+                    human_bytes(b)
+                ));
             }
         }
         s.join("\n")
@@ -553,7 +732,9 @@ fn path_is_inside(cwd: &Path, dir: &Path) -> bool {
 
 /// Directories under `<wt_root>/<repo>/` that git does not know as worktrees.
 fn find_orphans(wt_root: &Path, repo: &str, registered: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(wt_root.join(repo)) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(wt_root.join(repo)) else {
+        return Vec::new();
+    };
     let mut out: Vec<PathBuf> = rd
         .flatten()
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
@@ -561,9 +742,11 @@ fn find_orphans(wt_root: &Path, repo: &str, registered: &BTreeSet<PathBuf>) -> V
         .filter(|p| !registered.contains(&canonical(p)))
         .filter(|p| {
             // A live gitdir means another repo (same name) owns this worktree.
-            let gitdir = std::fs::read_to_string(p.join(".git"))
-                .ok()
-                .and_then(|t| t.trim().strip_prefix("gitdir:").map(|g| PathBuf::from(g.trim())));
+            let gitdir = std::fs::read_to_string(p.join(".git")).ok().and_then(|t| {
+                t.trim()
+                    .strip_prefix("gitdir:")
+                    .map(|g| PathBuf::from(g.trim()))
+            });
             !gitdir.is_some_and(|g| g.is_dir())
         })
         .collect();
@@ -600,7 +783,16 @@ fn gc_impl(ctx: &Ctx, cwd: &Path, args: &GcArgs, env: &Env) -> Result<GcReport> 
 
     let mut orphan_seen: BTreeSet<PathBuf> = BTreeSet::new();
     for repo in &repos {
-        gc_repo(ctx, repo, args, env, &dd, cwd, &mut report, &mut orphan_seen);
+        gc_repo(
+            ctx,
+            repo,
+            args,
+            env,
+            &dd,
+            cwd,
+            &mut report,
+            &mut orphan_seen,
+        );
     }
 
     // DerivedData of workspaces that no longer exist.
@@ -619,13 +811,26 @@ fn gc_impl(ctx: &Ctx, cwd: &Path, args: &GcArgs, env: &Env) -> Result<GcReport> 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], cwd: &Path, report: &mut GcReport, orphan_seen: &mut BTreeSet<PathBuf>) {
+fn gc_repo(
+    ctx: &Ctx,
+    repo: &RepoRef,
+    args: &GcArgs,
+    env: &Env,
+    dd: &[DdEntry],
+    cwd: &Path,
+    report: &mut GcReport,
+    orphan_seen: &mut BTreeSet<PathBuf>,
+) {
     // Only `--all --yes` is unlocked by main; the current repo is already locked there.
     let _guard = if args.all && args.yes {
         match lock::acquire(&repo.common_dir, LOCK_TIMEOUT) {
             Ok(g) => Some(g),
             Err(e) => {
-                ctx.warn(format!("skipping {}: {}", repo.common_dir.display(), e.message));
+                ctx.warn(format!(
+                    "skipping {}: {}",
+                    repo.common_dir.display(),
+                    e.message
+                ));
                 return;
             }
         }
@@ -642,12 +847,20 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
     let name = git::repo_name(&repo.common_dir);
     let repo_dir = repo_cwd(&wts, &repo.common_dir);
     let default = git::default_branch(&repo_dir).unwrap_or_else(|_| "main".to_string());
-    let opts = StatusOpts { sizes: false, use_gh: env.use_gh };
+    let opts = StatusOpts {
+        sizes: false,
+        use_gh: env.use_gh,
+    };
     let mut gh = GhCache::default();
     let mut candidates: Vec<WorktreeStatus> = Vec::new();
 
     for wt in wts.iter().filter(|w| !w.is_main && !w.bare) {
-        let skip = |reason: String| SkippedItem { repo: name.clone(), path: wt.path.clone(), branch: wt.branch.clone(), reason };
+        let skip = |reason: String| SkippedItem {
+            repo: name.clone(),
+            path: wt.path.clone(),
+            branch: wt.branch.clone(),
+            reason,
+        };
         if wt.prunable && wt.path.is_dir() {
             // Directory exists: git cannot use it, but it may hold real work. Never prune or remove.
             report.skipped.push(skip(format!("worktree link is broken; cmw cannot verify uncommitted work (git worktree repair {})", wt.path.display())));
@@ -677,19 +890,31 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
         let merged = st.merged == Some(true);
         if merged && !st.locked && st.dirty == 0 && st.error.is_none() && !st.has_submodules {
             if path_is_inside(cwd, &wt.path) {
-                report.skipped.push(skip("the current directory is inside this worktree".into()));
+                report
+                    .skipped
+                    .push(skip("the current directory is inside this worktree".into()));
             } else {
                 candidates.push(st);
             }
-        } else if let Some(days) = args.stale.filter(|d| st.idle_days.is_some_and(|i| i >= *d)).and(st.idle_days) {
-            report.stale.push(StaleItem { repo: name.clone(), path: wt.path.clone(), branch: wt.branch.clone(), idle_days: days });
+        } else if let Some(days) = args
+            .stale
+            .filter(|d| st.idle_days.is_some_and(|i| i >= *d))
+            .and(st.idle_days)
+        {
+            report.stale.push(StaleItem {
+                repo: name.clone(),
+                path: wt.path.clone(),
+                branch: wt.branch.clone(),
+                idle_days: days,
+            });
         } else if merged {
             let reason = if st.locked {
                 "locked".to_string()
             } else if let Some(e) = &st.error {
                 format!("could not inspect: {e}")
             } else if st.has_submodules {
-                "worktree has initialized submodules; cmw cannot verify their unpushed commits".to_string()
+                "worktree has initialized submodules; cmw cannot verify their unpushed commits"
+                    .to_string()
             } else {
                 format!("{} uncommitted changes", st.dirty)
             };
@@ -706,19 +931,34 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
             merged_via: st.merged_via.clone(),
             branch_deleted,
         };
-        let o = RemoveOpts { dry_run: !args.yes, sync: true, keep_branch: false };
+        let o = RemoveOpts {
+            dry_run: !args.yes,
+            sync: true,
+            keep_branch: false,
+        };
         match remove_worktree(ctx, &repo_dir, &st, dd, &env.trash, &o) {
             Ok(r) => {
                 report.derived_data.extend(r.derived_data);
                 if args.yes {
                     report.removed.push(item(r.branch_deleted, r.admin_cleanup));
                 } else {
-                    report.would_remove.push(item(r.branch_deleted, r.admin_cleanup));
+                    report
+                        .would_remove
+                        .push(item(r.branch_deleted, r.admin_cleanup));
                 }
             }
             Err(e) => {
-                ctx.warn(format!("could not remove {}: {}", st.path.display(), e.message));
-                report.skipped.push(SkippedItem { repo: name.clone(), path: st.path.clone(), branch: st.branch.clone(), reason: format!("removal failed: {}", e.message) });
+                ctx.warn(format!(
+                    "could not remove {}: {}",
+                    st.path.display(),
+                    e.message
+                ));
+                report.skipped.push(SkippedItem {
+                    repo: name.clone(),
+                    path: st.path.clone(),
+                    branch: st.branch.clone(),
+                    reason: format!("removal failed: {}", e.message),
+                });
             }
         }
     }
@@ -727,7 +967,11 @@ fn gc_repo(ctx: &Ctx, repo: &RepoRef, args: &GcArgs, env: &Env, dd: &[DdEntry], 
     for o in find_orphans(&env.wt_root, &name, &registered) {
         if orphan_seen.insert(o.clone()) {
             let hint = format!("rm -rf {}", sh_quote(&o.display().to_string()));
-            report.orphans.push(OrphanItem { repo: name.clone(), path: o, hint });
+            report.orphans.push(OrphanItem {
+                repo: name.clone(),
+                path: o,
+                hint,
+            });
         }
     }
 }
@@ -766,13 +1010,29 @@ impl Report for CleanArtifactsReport {
         }
         let mut s: Vec<String> = Vec::new();
         for w in &self.worktrees {
-            s.push(format!("{}  {}", w.branch.as_deref().unwrap_or("(detached)"), w.path.display()));
-            s.extend(w.items.iter().map(|i| format!("  {:>10}  {}", human_bytes(i.apparent_bytes), i.path.display())));
+            s.push(format!(
+                "{}  {}",
+                w.branch.as_deref().unwrap_or("(detached)"),
+                w.path.display()
+            ));
+            s.extend(w.items.iter().map(|i| {
+                format!(
+                    "  {:>10}  {}",
+                    human_bytes(i.apparent_bytes),
+                    i.path.display()
+                )
+            }));
         }
         match self.freed_bytes {
-            Some(b) => s.push(format!("deleted; freed ~{} (change in free disk space)", human_bytes(b))),
+            Some(b) => s.push(format!(
+                "deleted; freed ~{} (change in free disk space)",
+                human_bytes(b)
+            )),
             None => {
-                s.push(format!("{} apparent (APFS clones counted at full size; real savings are lower)", human_bytes(self.total_apparent_bytes)));
+                s.push(format!(
+                    "{} apparent (APFS clones counted at full size; real savings are lower)",
+                    human_bytes(self.total_apparent_bytes)
+                ));
                 s.push("run: cmw clean-artifacts --yes".to_string());
             }
         }
@@ -781,14 +1041,18 @@ impl Report for CleanArtifactsReport {
 }
 
 fn has_tracked(wt: &Path, rel: &str) -> bool {
-    git::run_raw(wt, &["ls-files", "-z", "--", rel.trim_end_matches('/')]).map(|o| !o.is_empty()).unwrap_or(true)
+    git::run_raw(wt, &["ls-files", "-z", "--", rel.trim_end_matches('/')])
+        .map(|o| !o.is_empty())
+        .unwrap_or(true)
 }
 
 /// Reclaimable directories nested inside an ignored generated native project (`ios/`, `android/`).
 fn nested_reclaimable(wt: &Path, top: &str, rules: &rules::RuleSet, out: &mut Vec<String>) {
     let mut stack = vec![(top.trim_end_matches('/').to_string(), 0u8)];
     while let Some((rel, depth)) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(wt.join(&rel)) else { continue };
+        let Ok(rd) = std::fs::read_dir(wt.join(&rel)) else {
+            continue;
+        };
         for e in rd.flatten() {
             if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
@@ -811,7 +1075,9 @@ fn artifact_paths(wt: &Path, rules: &rules::RuleSet) -> Result<Vec<PathBuf>> {
         let is_dir = entry.ends_with('/');
         match rules.classify(&entry, is_dir) {
             Some(r) if r.reclaimable => rels.push(entry),
-            Some(r) if r.native_project && is_dir => nested_reclaimable(wt, &entry, rules, &mut rels),
+            Some(r) if r.native_project && is_dir => {
+                nested_reclaimable(wt, &entry, rules, &mut rels)
+            }
             _ => {}
         }
     }
@@ -825,11 +1091,20 @@ fn artifact_paths(wt: &Path, rules: &rules::RuleSet) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-pub fn clean_artifacts(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs) -> Result<CleanArtifactsReport> {
+pub fn clean_artifacts(
+    ctx: &Ctx,
+    cwd: &Path,
+    args: &CleanArtifactsArgs,
+) -> Result<CleanArtifactsReport> {
     clean_artifacts_impl(ctx, cwd, args, &Env::real())
 }
 
-fn clean_artifacts_impl(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs, env: &Env) -> Result<CleanArtifactsReport> {
+fn clean_artifacts_impl(
+    ctx: &Ctx,
+    cwd: &Path,
+    args: &CleanArtifactsArgs,
+    env: &Env,
+) -> Result<CleanArtifactsReport> {
     let repos = inventory::discover(cwd, args.all, &env.scan_roots)?;
     let dd = scan_derived_data(&env.dd_root);
     let probe = args.yes.then(|| {
@@ -845,7 +1120,11 @@ fn clean_artifacts_impl(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs, env: &
             match lock::acquire(&repo.common_dir, LOCK_TIMEOUT) {
                 Ok(g) => Some(g),
                 Err(e) => {
-                    ctx.warn(format!("skipping {}: {}", repo.common_dir.display(), e.message));
+                    ctx.warn(format!(
+                        "skipping {}: {}",
+                        repo.common_dir.display(),
+                        e.message
+                    ));
                     continue;
                 }
             }
@@ -859,7 +1138,10 @@ fn clean_artifacts_impl(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs, env: &
                 continue;
             }
         };
-        for wt in wts.iter().filter(|w| !w.is_main && !w.bare && !w.prunable && w.path.is_dir()) {
+        for wt in wts
+            .iter()
+            .filter(|w| !w.is_main && !w.bare && !w.prunable && w.path.is_dir())
+        {
             let (_, idle) = inventory::activity(&wt.path);
             if !idle.is_some_and(|d| d >= args.idle) {
                 continue;
@@ -882,7 +1164,13 @@ fn clean_artifacts_impl(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs, env: &
             if targets.is_empty() {
                 continue;
             }
-            let items: Vec<ArtifactItem> = targets.into_iter().map(|p| ArtifactItem { apparent_bytes: inventory::apparent_size(&p), path: p }).collect();
+            let items: Vec<ArtifactItem> = targets
+                .into_iter()
+                .map(|p| ArtifactItem {
+                    apparent_bytes: inventory::apparent_size(&p),
+                    path: p,
+                })
+                .collect();
             if args.yes {
                 for i in &items {
                     if let Err(e) = delete_path(&i.path) {
@@ -890,11 +1178,24 @@ fn clean_artifacts_impl(ctx: &Ctx, cwd: &Path, args: &CleanArtifactsArgs, env: &
                     }
                 }
             }
-            worktrees.push(ArtifactWorktree { path: wt.path.clone(), branch: wt.branch.clone(), items });
+            worktrees.push(ArtifactWorktree {
+                path: wt.path.clone(),
+                branch: wt.branch.clone(),
+                items,
+            });
         }
     }
-    let total = worktrees.iter().flat_map(|w| &w.items).map(|i| i.apparent_bytes).sum();
-    Ok(CleanArtifactsReport { dry_run: !args.yes, worktrees, total_apparent_bytes: total, freed_bytes: probe.map(|p| p.freed()) })
+    let total = worktrees
+        .iter()
+        .flat_map(|w| &w.items)
+        .map(|i| i.apparent_bytes)
+        .sum();
+    Ok(CleanArtifactsReport {
+        dry_run: !args.yes,
+        worktrees,
+        total_apparent_bytes: total,
+        freed_bytes: probe.map(|p| p.freed()),
+    })
 }
 
 #[cfg(test)]
@@ -918,15 +1219,32 @@ mod tests {
     }
 
     fn rm_args(name: &str) -> RmArgs {
-        RmArgs { name: name.into(), force: false, keep_branch: false, dry_run: false }
+        RmArgs {
+            name: name.into(),
+            force: false,
+            keep_branch: false,
+            dry_run: false,
+        }
     }
 
     fn gc_args(yes: bool) -> GcArgs {
-        GcArgs { yes, stale: None, all: false }
+        GcArgs {
+            yes,
+            stale: None,
+            all: false,
+        }
     }
 
     fn branch_exists(repo: &Path, b: &str) -> bool {
-        git::run_ok(repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")])
+        git::run_ok(
+            repo,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{b}"),
+            ],
+        )
     }
 
     #[test]
@@ -955,7 +1273,11 @@ mod tests {
         commit_file(&wt, "a.txt");
         let e = rm_impl(&ctx(), &repo, &rm_args("work"), &env(t.path())).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Refused);
-        assert!(e.message.contains("1 unpushed") && e.message.contains("--force"), "{}", e.message);
+        assert!(
+            e.message.contains("1 unpushed") && e.message.contains("--force"),
+            "{}",
+            e.message
+        );
         assert!(e.hint.unwrap().contains("push -u origin work"));
         assert!(wt.exists());
     }
@@ -963,11 +1285,22 @@ mod tests {
     #[test]
     fn main_and_locked_are_refused() {
         let (t, repo) = repo();
-        let e = rm_impl(&ctx(), &repo, &rm_args(repo.to_str().unwrap()), &env(t.path())).unwrap_err();
+        let e = rm_impl(
+            &ctx(),
+            &repo,
+            &rm_args(repo.to_str().unwrap()),
+            &env(t.path()),
+        )
+        .unwrap_err();
         assert_eq!(e.kind, ErrorKind::Refused);
         let mut forced = rm_args("main");
         forced.force = true;
-        assert_eq!(rm_impl(&ctx(), &repo, &forced, &env(t.path())).unwrap_err().kind, ErrorKind::Refused);
+        assert_eq!(
+            rm_impl(&ctx(), &repo, &forced, &env(t.path()))
+                .unwrap_err()
+                .kind,
+            ErrorKind::Refused
+        );
         assert!(repo.join("README.md").exists());
 
         let wt = add_worktree(&repo, "lk");
@@ -1004,7 +1337,11 @@ mod tests {
         let dry = gc_impl(&ctx(), &repo, &gc_args(false), &env(t.path())).unwrap();
         assert_eq!(dry.would_remove.len(), 1);
         assert!(dry.freed_bytes.is_none());
-        assert!(dry.human().ends_with("run: cmw gc --yes"), "{}", dry.human());
+        assert!(
+            dry.human().ends_with("run: cmw gc --yes"),
+            "{}",
+            dry.human()
+        );
         assert!(wt.exists());
 
         let r = gc_impl(&ctx(), &repo, &gc_args(true), &env(t.path())).unwrap();
@@ -1075,10 +1412,17 @@ mod tests {
         assert_eq!(r.pruned.len(), 1);
         assert_eq!(r.pruned[0].outcome, "pruned");
         assert_eq!(r.skipped.len(), 1);
-        assert!(admin_of("broken").exists(), "broken admin dir was destroyed");
+        assert!(
+            admin_of("broken").exists(),
+            "broken admin dir was destroyed"
+        );
         assert!(!admin_of("gone").exists());
         assert!(broken.join("precious").exists() && !gone.exists());
-        let paths: Vec<_> = git::list_worktrees(&repo).unwrap().into_iter().map(|w| canonical(&w.path)).collect();
+        let paths: Vec<_> = git::list_worktrees(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|w| canonical(&w.path))
+            .collect();
         assert!(paths.contains(&canonical(&broken)));
         assert!(!paths.contains(&canonical(&gone)));
     }
@@ -1104,8 +1448,15 @@ mod tests {
         let r = rm_impl(&ctx(), &repo, &forced_for("x"), &env(t.path())).unwrap();
         assert_eq!(r.admin_cleanup, "deferred");
         assert!(!wt.exists());
-        let paths: Vec<_> = git::list_worktrees(&repo).unwrap().into_iter().map(|w| w.path).collect();
-        assert!(paths.contains(&unmounted), "unrelated registration was pruned");
+        let paths: Vec<_> = git::list_worktrees(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.path)
+            .collect();
+        assert!(
+            paths.contains(&unmounted),
+            "unrelated registration was pruned"
+        );
     }
 
     #[test]
@@ -1127,10 +1478,31 @@ mod tests {
         git(&sub, &["config", "user.email", "t@example.com"]);
         git(&sub, &["config", "user.name", "T"]);
         commit_file(&sub, "f");
-        git(repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "libs/sub"]);
+        git(
+            repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                sub.to_str().unwrap(),
+                "libs/sub",
+            ],
+        );
         git(repo, &["commit", "-q", "-m", "add sub"]);
         let wt = add_worktree(repo, name);
-        git(&wt, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+        git(
+            &wt,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "-q",
+            ],
+        );
         wt
     }
 
@@ -1140,7 +1512,11 @@ mod tests {
         let wt = submodule_worktree(t.path(), &repo, "smod");
         let e = rm_impl(&ctx(), &repo, &rm_args("smod"), &env(t.path())).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Refused);
-        assert!(e.message.contains("initialized submodules"), "{}", e.message);
+        assert!(
+            e.message.contains("initialized submodules"),
+            "{}",
+            e.message
+        );
         assert_eq!(e.hint.as_deref(), Some("cmw rm smod --force"));
         assert!(wt.exists());
     }
@@ -1153,7 +1529,13 @@ mod tests {
         git(&repo, &["merge", "--no-edit", "smod"]);
         let r = gc_impl(&ctx(), &repo, &gc_args(true), &env(t.path())).unwrap();
         assert!(r.removed.is_empty());
-        assert!(r.skipped.iter().any(|s| s.reason.contains("initialized submodules")), "{:?}", r.skipped);
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.reason.contains("initialized submodules")),
+            "{:?}",
+            r.skipped
+        );
         assert!(wt.exists());
     }
 
@@ -1211,7 +1593,11 @@ mod tests {
     fn gc_yes_removes_orphaned_derived_data() {
         let (t, repo) = repo();
         let e = env(t.path());
-        let orphan = write_plist(&e.dd_root, "Gone-ccc", &t.path().join("deleted/App.xcworkspace"));
+        let orphan = write_plist(
+            &e.dd_root,
+            "Gone-ccc",
+            &t.path().join("deleted/App.xcworkspace"),
+        );
         std::fs::create_dir_all(repo.join("App.xcworkspace")).unwrap();
         let live = write_plist(&e.dd_root, "Live-ddd", &repo.join("App.xcworkspace"));
         let dry = gc_impl(&ctx(), &repo, &gc_args(false), &e).unwrap();
@@ -1257,14 +1643,22 @@ mod tests {
         let wt = add_worktree(&repo, "art");
         std::fs::create_dir_all(wt.join("build")).unwrap();
         std::fs::write(wt.join("build/out.bin"), vec![0u8; 4096]).unwrap();
-        let args = CleanArtifactsArgs { idle: 0, yes: false, all: false };
+        let args = CleanArtifactsArgs {
+            idle: 0,
+            yes: false,
+            all: false,
+        };
         let dry = clean_artifacts_impl(&ctx(), &repo, &args, &env(t.path())).unwrap();
         assert_eq!(dry.worktrees.len(), 1);
         assert_eq!(dry.worktrees[0].items.len(), 1);
         assert!(dry.worktrees[0].items[0].apparent_bytes >= 4096);
         assert!(wt.join("build").exists() && dry.freed_bytes.is_none());
 
-        let args = CleanArtifactsArgs { idle: 0, yes: true, all: false };
+        let args = CleanArtifactsArgs {
+            idle: 0,
+            yes: true,
+            all: false,
+        };
         let r = clean_artifacts_impl(&ctx(), &repo, &args, &env(t.path())).unwrap();
         assert!(r.freed_bytes.is_some());
         assert!(!wt.join("build").exists());
@@ -1281,7 +1675,11 @@ mod tests {
         git(&wt, &["add", "-f", "build/keep.txt"]);
         git(&wt, &["commit", "-m", "track build file"]);
         std::fs::write(wt.join("build/junk.bin"), "junk").unwrap();
-        let args = CleanArtifactsArgs { idle: 0, yes: true, all: false };
+        let args = CleanArtifactsArgs {
+            idle: 0,
+            yes: true,
+            all: false,
+        };
         clean_artifacts_impl(&ctx(), &repo, &args, &env(t.path())).unwrap();
         assert!(wt.join("build/keep.txt").exists());
     }
@@ -1296,10 +1694,17 @@ mod tests {
         std::fs::create_dir_all(wt.join("ios/Pods/x/build")).unwrap();
         std::fs::write(wt.join("ios/build/a"), "a").unwrap();
         std::fs::write(wt.join("ios/Pods/x/build/b"), "b").unwrap();
-        let args = CleanArtifactsArgs { idle: 0, yes: true, all: false };
+        let args = CleanArtifactsArgs {
+            idle: 0,
+            yes: true,
+            all: false,
+        };
         clean_artifacts_impl(&ctx(), &repo, &args, &env(t.path())).unwrap();
         assert!(!wt.join("ios/build").exists());
-        assert!(wt.join("ios/Pods/x/build/b").exists(), "must not enter Pods");
+        assert!(
+            wt.join("ios/Pods/x/build/b").exists(),
+            "must not enter Pods"
+        );
     }
 
     #[test]
@@ -1308,7 +1713,11 @@ mod tests {
         let wt = add_worktree(&repo, "busy");
         std::fs::create_dir_all(wt.join("build")).unwrap();
         std::fs::write(wt.join("build/x"), "x").unwrap();
-        let args = CleanArtifactsArgs { idle: 7, yes: true, all: false };
+        let args = CleanArtifactsArgs {
+            idle: 7,
+            yes: true,
+            all: false,
+        };
         let r = clean_artifacts_impl(&ctx(), &repo, &args, &env(t.path())).unwrap();
         assert!(r.worktrees.is_empty());
         assert!(wt.join("build/x").exists());

@@ -76,10 +76,20 @@ fn fetch_merged_prs(ctx: &Ctx, repo_cwd: &Path) -> Option<Vec<(String, String)>>
         return None;
     }
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "list", "--state", "merged", "--limit", "200", "--json", "headRefName,headRefOid"])
-        .current_dir(repo_cwd)
-        .env("GH_PROMPT_DISABLED", "1");
-    let parsed = run_capture(cmd, Duration::from_secs(10)).and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    cmd.args([
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--limit",
+        "200",
+        "--json",
+        "headRefName,headRefOid",
+    ])
+    .current_dir(repo_cwd)
+    .env("GH_PROMPT_DISABLED", "1");
+    let parsed = run_capture(cmd, Duration::from_secs(10))
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     let Some(serde_json::Value::Array(items)) = parsed else {
         ctx.warn("could not list merged PRs with gh; falling back to git-only merge detection");
         return None;
@@ -87,14 +97,24 @@ fn fetch_merged_prs(ctx: &Ctx, repo_cwd: &Path) -> Option<Vec<(String, String)>>
     Some(
         items
             .iter()
-            .filter_map(|i| Some((i.get("headRefName")?.as_str()?.to_string(), i.get("headRefOid")?.as_str()?.to_string())))
+            .filter_map(|i| {
+                Some((
+                    i.get("headRefName")?.as_str()?.to_string(),
+                    i.get("headRefOid")?.as_str()?.to_string(),
+                ))
+            })
             .collect(),
     )
 }
 
 /// Run a command with stdin/stderr null, capture stdout, kill it after `timeout`. None on failure or timeout.
 fn run_capture(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -118,12 +138,17 @@ fn run_capture(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// (last commit unix time, idle days). Idle = days since max(last commit, mtime of `<git_dir>/index`).
 pub fn activity(wt_path: &Path) -> (Option<i64>, Option<u64>) {
-    let last_commit = git::run(wt_path, &["log", "-1", "--format=%ct"]).ok().and_then(|s| s.trim().parse::<i64>().ok());
+    let last_commit = git::run(wt_path, &["log", "-1", "--format=%ct"])
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok());
     let index_mtime = git::git_dir(wt_path)
         .ok()
         .and_then(|gd| std::fs::metadata(gd.join("index")).ok())
@@ -140,7 +165,9 @@ pub fn apparent_size(path: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(p) = stack.pop() {
-        let Ok(md) = std::fs::symlink_metadata(&p) else { continue };
+        let Ok(md) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
         if md.is_dir() {
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| e.path()));
@@ -153,7 +180,10 @@ pub fn apparent_size(path: &Path) -> u64 {
 }
 
 fn ref_exists(cwd: &Path, r: &str) -> bool {
-    git::run_ok(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/{r}")])
+    git::run_ok(
+        cwd,
+        &["show-ref", "--verify", "--quiet", &format!("refs/{r}")],
+    )
 }
 
 /// (merged, via, reason). Conservative: only says Some(true) with positive evidence.
@@ -174,17 +204,44 @@ fn detect_merge(
     if branch == default_branch {
         return (None, None, "default branch".into());
     }
-    let refs: Vec<String> = [format!("origin/{default_branch}"), default_branch.to_string()]
-        .into_iter()
-        .filter(|r| ref_exists(&wt.path, &if r.starts_with("origin/") { format!("remotes/{r}") } else { format!("heads/{r}") }))
-        .collect();
-    if let Some(r) = refs.iter().find(|r| git::run_ok(&wt.path, &["merge-base", "--is-ancestor", "HEAD", r])) {
+    let refs: Vec<String> = [
+        format!("origin/{default_branch}"),
+        default_branch.to_string(),
+    ]
+    .into_iter()
+    .filter(|r| {
+        ref_exists(
+            &wt.path,
+            &if r.starts_with("origin/") {
+                format!("remotes/{r}")
+            } else {
+                format!("heads/{r}")
+            },
+        )
+    })
+    .collect();
+    if let Some(r) = refs
+        .iter()
+        .find(|r| git::run_ok(&wt.path, &["merge-base", "--is-ancestor", "HEAD", r]))
+    {
         // A branch with a single reflog entry was just created: its HEAD is trivially an ancestor.
-        let entries = git::run(&wt.path, &["reflog", "show", "--format=%H", &format!("refs/heads/{branch}")])
-            .map(|s| s.lines().filter(|l| !l.is_empty()).count())
-            .unwrap_or(0);
+        let entries = git::run(
+            &wt.path,
+            &[
+                "reflog",
+                "show",
+                "--format=%H",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0);
         return if entries > 1 {
-            (Some(true), Some("ancestor"), format!("HEAD is an ancestor of {r}"))
+            (
+                Some(true),
+                Some("ancestor"),
+                format!("HEAD is an ancestor of {r}"),
+            )
         } else {
             (Some(false), None, "no_commits".into())
         };
@@ -197,7 +254,11 @@ fn detect_merge(
                 if let Ok(out) = git::run(&wt.path, &["cherry", r, "HEAD"]) {
                     let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
                     if !lines.is_empty() && lines.iter().all(|l| l.starts_with('-')) {
-                        return (Some(true), Some("patch_id"), format!("every commit has an equivalent patch in {r}"));
+                        return (
+                            Some(true),
+                            Some("patch_id"),
+                            format!("every commit has an equivalent patch in {r}"),
+                        );
                     }
                 }
             }
@@ -207,25 +268,48 @@ fn detect_merge(
     }
     if opts.use_gh
         && let Some(head) = wt.head.as_deref()
-            && gh.has_merged_pr(ctx, repo_cwd, branch, head) {
-                return (Some(true), Some("gh"), "a merged GitHub PR has this branch at HEAD".into());
-            }
+        && gh.has_merged_pr(ctx, repo_cwd, branch, head)
+    {
+        return (
+            Some(true),
+            Some("gh"),
+            "a merged GitHub PR has this branch at HEAD".into(),
+        );
+    }
     let target = refs.first().map(String::as_str).unwrap_or(default_branch);
-    (Some(false), None, cherry_reason.unwrap_or_else(|| format!("not merged into {target}")))
+    (
+        Some(false),
+        None,
+        cherry_reason.unwrap_or_else(|| format!("not merged into {target}")),
+    )
 }
 
 fn unpushed_count(wt: &Path, default_branch: &str) -> Result<u32> {
-    let has_remotes = git::run(wt, &["remote"]).map(|s| !s.is_empty()).unwrap_or(true);
+    let has_remotes = git::run(wt, &["remote"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(true);
     let out = if has_remotes {
         git::run(wt, &["rev-list", "--count", "HEAD", "--not", "--remotes"])?
     } else {
-        git::run(wt, &["rev-list", "--count", "HEAD", "--not", default_branch])?
+        git::run(
+            wt,
+            &["rev-list", "--count", "HEAD", "--not", default_branch],
+        )?
     };
-    out.trim().parse().map_err(|_| crate::output::CmwError::error(format!("unexpected rev-list output: {out}")))
+    out.trim()
+        .parse()
+        .map_err(|_| crate::output::CmwError::error(format!("unexpected rev-list output: {out}")))
 }
 
 /// Inspect one worktree. Never fails: problems land in `error` or in conservative field values.
-pub fn status(ctx: &Ctx, repo_cwd: &Path, wt: &Worktree, default_branch: &str, opts: &StatusOpts, gh: &mut GhCache) -> WorktreeStatus {
+pub fn status(
+    ctx: &Ctx,
+    repo_cwd: &Path,
+    wt: &Worktree,
+    default_branch: &str,
+    opts: &StatusOpts,
+    gh: &mut GhCache,
+) -> WorktreeStatus {
     let mut st = WorktreeStatus {
         path: wt.path.clone(),
         branch: wt.branch.clone(),
@@ -279,11 +363,19 @@ pub fn status(ctx: &Ctx, repo_cwd: &Path, wt: &Worktree, default_branch: &str, o
             st.error.get_or_insert(e.message);
         }
     }
-    st.hydrated = git::git_dir(&wt.path).map(|gd| gd.join(paths::STATE_FILE).exists()).unwrap_or(false);
+    st.hydrated = git::git_dir(&wt.path)
+        .map(|gd| gd.join(paths::STATE_FILE).exists())
+        .unwrap_or(false);
     (st.last_commit_unix, st.idle_days) = activity(&wt.path);
 
-    if let Ok(up) = git::run(&wt.path, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
-        if let Ok(counts) = git::run(&wt.path, &["rev-list", "--left-right", "--count", "HEAD...@{u}"]) {
+    if let Ok(up) = git::run(
+        &wt.path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    ) {
+        if let Ok(counts) = git::run(
+            &wt.path,
+            &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+        ) {
             let mut it = counts.split_whitespace().map(|n| n.parse::<u32>().ok());
             st.ahead = it.next().flatten();
             st.behind = it.next().flatten();
@@ -322,7 +414,9 @@ fn canonical(p: PathBuf) -> PathBuf {
 fn find_worktree_dirs(root: &Path, out: &mut Vec<PathBuf>) {
     let mut stack = vec![(root.to_path_buf(), 0u8)];
     while let Some((dir, depth)) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in rd.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
             if !ft.is_dir() {
@@ -330,7 +424,10 @@ fn find_worktree_dirs(root: &Path, out: &mut Vec<PathBuf>) {
             }
             let p = entry.path();
             let dotgit = p.join(".git");
-            if std::fs::symlink_metadata(&dotgit).map(|m| m.is_file()).unwrap_or(false) {
+            if std::fs::symlink_metadata(&dotgit)
+                .map(|m| m.is_file())
+                .unwrap_or(false)
+            {
                 out.push(p);
             } else if depth < 2 {
                 stack.push((p, depth + 1));
@@ -342,7 +439,10 @@ fn find_worktree_dirs(root: &Path, out: &mut Vec<PathBuf>) {
 /// The repo of `cwd`, or with `all`, every repo that has a linked worktree under `roots`.
 pub fn discover(cwd: &Path, all: bool, roots: &[PathBuf]) -> Result<Vec<RepoRef>> {
     if !all {
-        return Ok(vec![RepoRef { common_dir: canonical(git::common_dir(cwd)?), cwd: cwd.to_path_buf() }]);
+        return Ok(vec![RepoRef {
+            common_dir: canonical(git::common_dir(cwd)?),
+            cwd: cwd.to_path_buf(),
+        }]);
     }
     let mut dirs = Vec::new();
     for r in roots {
@@ -355,7 +455,10 @@ pub fn discover(cwd: &Path, all: bool, roots: &[PathBuf]) -> Result<Vec<RepoRef>
             repos.entry(canonical(common)).or_insert(d);
         }
     }
-    Ok(repos.into_iter().map(|(common_dir, cwd)| RepoRef { common_dir, cwd }).collect())
+    Ok(repos
+        .into_iter()
+        .map(|(common_dir, cwd)| RepoRef { common_dir, cwd })
+        .collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -375,12 +478,26 @@ pub struct LsReport {
 
 fn table(rows: &[Vec<String>]) -> String {
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let widths: Vec<usize> = (0..cols).map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| s.chars().count()).max().unwrap_or(0)).collect();
+    let widths: Vec<usize> = (0..cols)
+        .map(|c| {
+            rows.iter()
+                .filter_map(|r| r.get(c))
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
     rows.iter()
         .map(|r| {
             r.iter()
                 .enumerate()
-                .map(|(i, cell)| if i + 1 == r.len() { cell.clone() } else { format!("{cell:<w$}", w = widths[i]) })
+                .map(|(i, cell)| {
+                    if i + 1 == r.len() {
+                        cell.clone()
+                    } else {
+                        format!("{cell:<w$}", w = widths[i])
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("  ")
         })
@@ -438,7 +555,12 @@ impl Report for LsReport {
                 row.push(w.path.display().to_string());
                 rows.push(row);
             }
-            blocks.push(format!("{} ({})\n{}", repo.repo, repo.common_dir.display(), table(&rows)));
+            blocks.push(format!(
+                "{} ({})\n{}",
+                repo.repo,
+                repo.common_dir.display(),
+                table(&rows)
+            ));
         }
         let mut out = blocks.join("\n\n");
         if self.sizes {
@@ -466,7 +588,10 @@ pub fn ls(ctx: &Ctx, cwd: &Path, args: &LsArgs) -> Result<LsReport> {
 fn ls_in(ctx: &Ctx, cwd: &Path, args: &LsArgs, roots: &[PathBuf]) -> Result<LsReport> {
     let repos = discover(cwd, args.all, roots)?;
     // ls stays offline and fast: merge detection uses git only (gc/rm also consult gh).
-    let opts = StatusOpts { sizes: args.sizes, use_gh: false };
+    let opts = StatusOpts {
+        sizes: args.sizes,
+        use_gh: false,
+    };
     let mut out = Vec::new();
     for repo in repos {
         let wts = match git::list_worktrees(&repo.cwd) {
@@ -478,15 +603,29 @@ fn ls_in(ctx: &Ctx, cwd: &Path, args: &LsArgs, roots: &[PathBuf]) -> Result<LsRe
         };
         let default = git::default_branch(&repo.cwd).unwrap_or_else(|_| "main".to_string());
         let mut gh = GhCache::default();
-        let worktrees = wts.iter().map(|w| status(ctx, &repo.cwd, w, &default, &opts, &mut gh)).collect();
-        out.push(RepoStatus { repo: git::repo_name(&repo.common_dir), common_dir: repo.common_dir, default_branch: default, worktrees });
+        let worktrees = wts
+            .iter()
+            .map(|w| status(ctx, &repo.cwd, w, &default, &opts, &mut gh))
+            .collect();
+        out.push(RepoStatus {
+            repo: git::repo_name(&repo.common_dir),
+            common_dir: repo.common_dir,
+            default_branch: default,
+            worktrees,
+        });
     }
-    Ok(LsReport { repos: out, sizes: args.sizes })
+    Ok(LsReport {
+        repos: out,
+        sizes: args.sizes,
+    })
 }
 
 pub fn path(_ctx: &Ctx, cwd: &Path, args: &PathArgs) -> Result<PathReport> {
     let worktree = crate::git::resolve_worktree(cwd, &args.name)?;
-    Ok(PathReport { path: worktree.path, branch: worktree.branch })
+    Ok(PathReport {
+        path: worktree.path,
+        branch: worktree.branch,
+    })
 }
 
 #[cfg(test)]
@@ -502,7 +641,11 @@ pub(crate) mod testutil {
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
@@ -542,13 +685,23 @@ mod tests {
     use super::*;
 
     fn opts() -> StatusOpts {
-        StatusOpts { sizes: false, use_gh: false }
+        StatusOpts {
+            sizes: false,
+            use_gh: false,
+        }
     }
 
     fn st_of(repo: &Path, wt_path: &Path) -> WorktreeStatus {
         let wts = git::list_worktrees(repo).unwrap();
         let wt = wts.iter().find(|w| w.path == wt_path).unwrap();
-        status(&Ctx::new(true, "ls"), repo, wt, "main", &opts(), &mut GhCache::default())
+        status(
+            &Ctx::new(true, "ls"),
+            repo,
+            wt,
+            "main",
+            &opts(),
+            &mut GhCache::default(),
+        )
     }
 
     #[test]
@@ -603,10 +756,24 @@ mod tests {
         add_worktree(&repo, "two");
         let ctx = Ctx::new(true, "ls");
         let roots = vec![t.path().join("wts")];
-        let r = ls_in(&ctx, t.path(), &LsArgs { all: true, sizes: true }, &roots).unwrap();
+        let r = ls_in(
+            &ctx,
+            t.path(),
+            &LsArgs {
+                all: true,
+                sizes: true,
+            },
+            &roots,
+        )
+        .unwrap();
         assert_eq!(r.repos.len(), 1);
         assert_eq!(r.repos[0].worktrees.len(), 3); // main + 2
-        assert!(r.repos[0].worktrees.iter().all(|w| w.apparent_bytes.is_some()));
+        assert!(
+            r.repos[0]
+                .worktrees
+                .iter()
+                .all(|w| w.apparent_bytes.is_some())
+        );
         assert!(r.human().contains("BRANCH"));
     }
 
@@ -651,10 +818,31 @@ mod tests {
         git(&sub, &["config", "user.email", "t@example.com"]);
         git(&sub, &["config", "user.name", "T"]);
         commit_file(&sub, "f");
-        git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.to_str().unwrap(), "libs/sub"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                sub.to_str().unwrap(),
+                "libs/sub",
+            ],
+        );
         git(&repo, &["commit", "-q", "-m", "add sub"]);
         let wt = add_worktree(&repo, "smod");
-        git(&wt, &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+        git(
+            &wt,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "-q",
+            ],
+        );
         git(&wt, &["config", "diff.ignoreSubmodules", "all"]);
         std::fs::write(wt.join("libs/sub/precious"), "x").unwrap();
         let st = st_of(&repo, &wt);

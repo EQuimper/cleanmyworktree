@@ -60,8 +60,10 @@ pub fn load(root: &Path) -> Result<Config> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
         Err(e) => return Err(e.into()),
     };
-    let raw: RawConfig = toml::from_str(&text)
-        .map_err(|e| CmwError::usage(format!("invalid {}: {e}", path.display())).with_hint(format!("fix or delete {}", path.display())))?;
+    let raw: RawConfig = toml::from_str(&text).map_err(|e| {
+        CmwError::usage(format!("invalid {}: {e}", path.display()))
+            .with_hint(format!("fix or delete {}", path.display()))
+    })?;
     let rules = raw
         .rule
         .into_iter()
@@ -74,7 +76,10 @@ pub fn load(root: &Path) -> Result<Config> {
             native_project: false,
         })
         .collect();
-    Ok(Config { rules, post_hydrate: raw.hydrate.post })
+    Ok(Config {
+        rules,
+        post_hydrate: raw.hydrate.post,
+    })
 }
 
 /// Rules for a worktree: its `.cmw.toml` (if any) layered over built-ins.

@@ -42,7 +42,10 @@ pub fn init(args: &ShellInitArgs) -> ShellInitReport {
         Shell::Bash => ("bash", POSIX),
         Shell::Fish => ("fish", FISH),
     };
-    ShellInitReport { shell: shell.into(), script: script.into() }
+    ShellInitReport {
+        shell: shell.into(),
+        script: script.into(),
+    }
 }
 
 #[cfg(test)]

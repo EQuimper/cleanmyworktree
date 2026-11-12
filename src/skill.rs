@@ -89,11 +89,14 @@ const AGENTS_MD: &str = r#"## Worktrees (cmw)
 "#;
 
 pub fn print(agents_md: bool) -> TextReport {
-    TextReport { text: if agents_md { AGENTS_MD } else { SKILL_MD }.to_string() }
+    TextReport {
+        text: if agents_md { AGENTS_MD } else { SKILL_MD }.to_string(),
+    }
 }
 
 fn default_skill_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").ok_or_else(|| CmwError::error("$HOME is not set; pass --dir"))?;
+    let home =
+        std::env::var_os("HOME").ok_or_else(|| CmwError::error("$HOME is not set; pass --dir"))?;
     Ok(PathBuf::from(home).join(".claude/skills/cmw"))
 }
 
@@ -117,7 +120,10 @@ fn install_to(dir: &Path) -> Result<SkillInstallReport> {
         std::fs::create_dir_all(dir)?;
         std::fs::write(&file, SKILL_MD)?;
     }
-    Ok(SkillInstallReport { path: file.display().to_string(), status: status.into() })
+    Ok(SkillInstallReport {
+        path: file.display().to_string(),
+        status: status.into(),
+    })
 }
 
 pub fn hook_claude() -> TextReport {
@@ -127,7 +133,9 @@ pub fn hook_claude() -> TextReport {
             "WorktreeRemove": [{"hooks": [{"type": "command", "command": "cmw hook claude-remove"}]}],
         }
     });
-    TextReport { text: serde_json::to_string_pretty(&doc).expect("static json") }
+    TextReport {
+        text: serde_json::to_string_pretty(&doc).expect("static json"),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -143,22 +151,32 @@ struct RemovePayload {
 }
 
 fn field(v: &serde_json::Value, key: &str) -> Option<String> {
-    v.get(key).and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(str::to_string)
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_create(input: &str) -> Result<CreatePayload> {
-    let v: serde_json::Value =
-        serde_json::from_str(input).map_err(|e| CmwError::usage(format!("invalid WorktreeCreate JSON on stdin: {e}")))?;
-    let name = field(&v, "name").ok_or_else(|| CmwError::usage("WorktreeCreate payload has no `name`"))?;
-    Ok(CreatePayload { name, cwd: field(&v, "cwd").map(PathBuf::from) })
+    let v: serde_json::Value = serde_json::from_str(input)
+        .map_err(|e| CmwError::usage(format!("invalid WorktreeCreate JSON on stdin: {e}")))?;
+    let name =
+        field(&v, "name").ok_or_else(|| CmwError::usage("WorktreeCreate payload has no `name`"))?;
+    Ok(CreatePayload {
+        name,
+        cwd: field(&v, "cwd").map(PathBuf::from),
+    })
 }
 
 fn parse_remove(input: &str) -> Result<RemovePayload> {
-    let v: serde_json::Value =
-        serde_json::from_str(input).map_err(|e| CmwError::usage(format!("invalid WorktreeRemove JSON on stdin: {e}")))?;
-    let worktree_path =
-        field(&v, "worktree_path").ok_or_else(|| CmwError::usage("WorktreeRemove payload has no `worktree_path`"))?;
-    Ok(RemovePayload { worktree_path, cwd: field(&v, "cwd").map(PathBuf::from) })
+    let v: serde_json::Value = serde_json::from_str(input)
+        .map_err(|e| CmwError::usage(format!("invalid WorktreeRemove JSON on stdin: {e}")))?;
+    let worktree_path = field(&v, "worktree_path")
+        .ok_or_else(|| CmwError::usage("WorktreeRemove payload has no `worktree_path`"))?;
+    Ok(RemovePayload {
+        worktree_path,
+        cwd: field(&v, "cwd").map(PathBuf::from),
+    })
 }
 
 fn read_stdin() -> Result<String> {
@@ -176,12 +194,17 @@ pub fn hook_claude_create(ctx: &Ctx, cwd: &Path) -> Result<TextReport> {
         path: None,
         fetch: false,
         no_hydrate: false,
-        install: InstallFlags { no_install: false, no_slow: true },
+        install: InstallFlags {
+            no_install: false,
+            no_slow: true,
+        },
     };
     let dir = p.cwd.unwrap_or_else(|| cwd.to_path_buf());
     let _lock = crate::lock_repo(&dir)?;
     let report = crate::new::run(ctx, &dir, &args)?;
-    Ok(TextReport { text: worktree_path_of(&report)? })
+    Ok(TextReport {
+        text: worktree_path_of(&report)?,
+    })
 }
 
 /// `cmw new` documents `data.path`; read it from the serialized report so this hook only
@@ -197,11 +220,18 @@ fn worktree_path_of<T: Serialize>(report: &T) -> Result<String> {
 /// WorktreeRemove hook: read stdin JSON, remove via `crate::gc::rm` (never --force).
 pub fn hook_claude_remove(ctx: &Ctx, cwd: &Path) -> Result<TextReport> {
     let p = parse_remove(&read_stdin()?)?;
-    let args = RmArgs { name: p.worktree_path.clone(), force: false, keep_branch: false, dry_run: false };
+    let args = RmArgs {
+        name: p.worktree_path.clone(),
+        force: false,
+        keep_branch: false,
+        dry_run: false,
+    };
     let dir = p.cwd.unwrap_or_else(|| cwd.to_path_buf());
     let _lock = crate::lock_repo(&dir)?;
     crate::gc::rm(ctx, &dir, &args)?;
-    Ok(TextReport { text: format!("removed {}", p.worktree_path) })
+    Ok(TextReport {
+        text: format!("removed {}", p.worktree_path),
+    })
 }
 
 #[cfg(test)]
@@ -223,20 +253,38 @@ mod tests {
         assert_eq!(install_to(&dir).unwrap().status, "unchanged");
         std::fs::write(dir.join("SKILL.md"), "old").unwrap();
         assert_eq!(install_to(&dir).unwrap().status, "updated");
-        assert_eq!(std::fs::read_to_string(dir.join("SKILL.md")).unwrap(), SKILL_MD);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            SKILL_MD
+        );
     }
 
     #[test]
     fn hook_snippet_wires_both_events() {
         let v: serde_json::Value = serde_json::from_str(&hook_claude().text).unwrap();
-        assert_eq!(v["hooks"]["WorktreeCreate"][0]["hooks"][0]["command"], "cmw hook claude-create");
-        assert_eq!(v["hooks"]["WorktreeRemove"][0]["hooks"][0]["command"], "cmw hook claude-remove");
+        assert_eq!(
+            v["hooks"]["WorktreeCreate"][0]["hooks"][0]["command"],
+            "cmw hook claude-create"
+        );
+        assert_eq!(
+            v["hooks"]["WorktreeRemove"][0]["hooks"][0]["command"],
+            "cmw hook claude-remove"
+        );
     }
 
     #[test]
     fn parses_create_payload() {
-        let p = parse_create(r#"{"hook_event_name":"WorktreeCreate","name":"feature-auth","cwd":"/r"}"#).unwrap();
-        assert_eq!(p, CreatePayload { name: "feature-auth".into(), cwd: Some("/r".into()) });
+        let p = parse_create(
+            r#"{"hook_event_name":"WorktreeCreate","name":"feature-auth","cwd":"/r"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            p,
+            CreatePayload {
+                name: "feature-auth".into(),
+                cwd: Some("/r".into())
+            }
+        );
         assert!(parse_create(r#"{"cwd":"/r"}"#).is_err());
         assert!(parse_create("nope").is_err());
         assert_eq!(parse_create(r#"{"name":"x"}"#).unwrap().cwd, None);
@@ -244,7 +292,10 @@ mod tests {
 
     #[test]
     fn extracts_path_from_report() {
-        assert_eq!(worktree_path_of(&serde_json::json!({"path": "/w/x", "branch": "b"})).unwrap(), "/w/x");
+        assert_eq!(
+            worktree_path_of(&serde_json::json!({"path": "/w/x", "branch": "b"})).unwrap(),
+            "/w/x"
+        );
         assert!(worktree_path_of(&serde_json::json!({"branch": "b"})).is_err());
     }
 

@@ -24,7 +24,11 @@ impl Drop for RepoLock {
 /// Acquire the lock, waiting up to `timeout`. Errors with a hint if another cmw holds it.
 pub fn acquire(common_dir: &Path, timeout: Duration) -> Result<RepoLock> {
     let path = common_dir.join("cmw.lock");
-    let file = OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
     let start = Instant::now();
     loop {
         if try_lock(&file) {

@@ -29,7 +29,8 @@ fn ref_exists(cwd: &Path, name: &str) -> bool {
 }
 
 pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
-    let main = git::main_worktree(cwd)?.ok_or_else(|| CmwError::not_found("no main checkout found"))?;
+    let main =
+        git::main_worktree(cwd)?.ok_or_else(|| CmwError::not_found("no main checkout found"))?;
     let common = git::common_dir(cwd)?;
     let branch = args.branch.as_str();
 
@@ -43,12 +44,20 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
         let path = match &args.path {
             Some(p) if p.is_absolute() => p.clone(),
             Some(p) => cwd.join(p),
-            None => paths::worktrees_root().join(git::repo_name(&common)).join(git::slugify(branch)),
+            None => paths::worktrees_root()
+                .join(git::repo_name(&common))
+                .join(git::slugify(branch)),
         };
         if std::fs::symlink_metadata(&path).is_ok() {
             return Err(CmwError::refused(
-                format!("{} already exists and is not a worktree for '{branch}'", path.display()),
-                format!("cmw new {} --path <other-dir>", crate::output::sh_quote(branch)),
+                format!(
+                    "{} already exists and is not a worktree for '{branch}'",
+                    path.display()
+                ),
+                format!(
+                    "cmw new {} --path <other-dir>",
+                    crate::output::sh_quote(branch)
+                ),
             ));
         }
         if let Some(parent) = path.parent() {
@@ -65,7 +74,10 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
             git::run(&main.path, &["worktree", "add", &p, branch])?;
             None
         } else if ref_exists(&main.path, &format!("refs/remotes/{remote}")) {
-            git::run(&main.path, &["worktree", "add", "--track", "-b", branch, &p, &remote])?;
+            git::run(
+                &main.path,
+                &["worktree", "add", "--track", "-b", branch, &p, &remote],
+            )?;
             Some(remote)
         } else {
             let base = match &args.base {
@@ -73,7 +85,11 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
                 None => {
                     let def = git::default_branch(&main.path)?;
                     let origin_def = format!("origin/{def}");
-                    if ref_exists(&main.path, &format!("refs/remotes/{origin_def}")) { origin_def } else { def }
+                    if ref_exists(&main.path, &format!("refs/remotes/{origin_def}")) {
+                        origin_def
+                    } else {
+                        def
+                    }
                 }
             };
             git::run(&main.path, &["worktree", "add", "-b", branch, &p, &base])?;
@@ -96,14 +112,24 @@ pub fn run(ctx: &Ctx, cwd: &Path, args: &NewArgs) -> Result<NewReport> {
                 let quoted = crate::output::sh_quote(&path.to_string_lossy());
                 return Err(crate::output::CmwError::new(
                     e.kind,
-                    format!("worktree created at {} but hydrate failed: {}", path.display(), e.message),
+                    format!(
+                        "worktree created at {} but hydrate failed: {}",
+                        path.display(),
+                        e.message
+                    ),
                 )
                 .with_hint(e.hint.unwrap_or_else(|| format!("cmw hydrate {quoted}"))));
             }
         }
     }
 
-    Ok(NewReport { path, branch: branch.to_string(), created, base, hydrate: hydrate_report })
+    Ok(NewReport {
+        path,
+        branch: branch.to_string(),
+        created,
+        base,
+        hydrate: hydrate_report,
+    })
 }
 
 #[cfg(test)]
@@ -114,8 +140,16 @@ mod tests {
     use std::process::Command;
 
     fn git_cmd(dir: &Path, args: &[&str]) {
-        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     fn args(branch: &str, path: &Path) -> NewArgs {
@@ -125,7 +159,10 @@ mod tests {
             path: Some(path.to_path_buf()),
             fetch: false,
             no_hydrate: false,
-            install: InstallFlags { no_install: true, no_slow: false },
+            install: InstallFlags {
+                no_install: true,
+                no_slow: false,
+            },
         }
     }
 
@@ -164,7 +201,15 @@ mod tests {
 
         // Existing branch without a worktree is checked out, not recreated.
         git_cmd(&main, &["branch", "old"]);
-        let r3 = run(&ctx, &main, &NewArgs { no_hydrate: true, ..args("old", &root.join("old")) }).unwrap();
+        let r3 = run(
+            &ctx,
+            &main,
+            &NewArgs {
+                no_hydrate: true,
+                ..args("old", &root.join("old"))
+            },
+        )
+        .unwrap();
         assert!(r3.created && r3.base.is_none() && r3.hydrate.is_none());
 
         // Occupied path is refused.

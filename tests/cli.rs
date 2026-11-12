@@ -51,7 +51,12 @@ fn new_json_envelope() {
 fn new_json_via_env_var() {
     let sb = Sandbox::new();
     let wt2 = sb.wt("wt2");
-    let out = sb.cmd().env("CMW_JSON", "1").args(["new", "feat/y", "--path", s(&wt2)]).output().unwrap();
+    let out = sb
+        .cmd()
+        .env("CMW_JSON", "1")
+        .args(["new", "feat/y", "--path", s(&wt2)])
+        .output()
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["ok"], true);
     assert_eq!(v["command"], "new");
@@ -91,7 +96,10 @@ fn ls_lists_both() {
     assert_eq!(code, 0);
     let wts = v["data"]["repos"][0]["worktrees"].as_array().unwrap();
     assert_eq!(wts.len(), 2);
-    let main = wts.iter().find(|w| w["path"] == s(&sb.main)).expect("main listed");
+    let main = wts
+        .iter()
+        .find(|w| w["path"] == s(&sb.main))
+        .expect("main listed");
     assert_eq!(main["is_main"], true);
     let new = wts.iter().find(|w| w["path"] == s(&wt)).expect("wt listed");
     assert_eq!(new["is_main"], false);
@@ -123,7 +131,12 @@ fn rm_refuses_unmerged_with_remote() {
     let wt = sb.new_wt("feat/x", "wt", &[]);
     sb.commit(&wt, "f.txt", "f\n", "unpushed work");
     let out = sb.run(&["rm", "feat/x"]);
-    assert_eq!(out.status.code(), Some(3), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(wt.exists());
 }
 
@@ -133,10 +146,18 @@ fn rm_happy_path_merged() {
     let wt = sb.new_wt("feat/x", "wt", &[]);
     sb.merge_branch(&wt, "feat/x");
     let out = sb.run(&["rm", "feat/x"]);
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(gone(&wt));
     let branches = git(&sb.main, &["branch", "--list", "feat/x"]);
-    assert!(branches.trim().is_empty(), "branch still present: {branches}");
+    assert!(
+        branches.trim().is_empty(),
+        "branch still present: {branches}"
+    );
     let list = git(&sb.main, &["worktree", "list"]);
     assert!(!list.contains(s(&wt)), "{list}");
 }
@@ -159,7 +180,13 @@ fn gc_dry_run_and_yes() {
     let (code, v) = sb.json(&["gc", "--yes"]);
     assert_eq!(code, 0);
     assert!(v["data"]["freed_bytes"].is_number(), "{v}");
-    assert!(v["data"]["removed"].as_array().unwrap().iter().any(|i| i["path"] == s(&merged)));
+    assert!(
+        v["data"]["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["path"] == s(&merged))
+    );
     assert!(gone(&merged));
     assert!(fresh.exists());
 }
@@ -176,7 +203,12 @@ fn env_sync_copied_kept_force() {
     let sb = Sandbox::new();
     let wt = sb.new_wt("feat/x", "wt", &[]);
     let status = |v: &serde_json::Value| -> String {
-        v["data"]["files"].as_array().unwrap().iter().find(|f| f["path"] == ".env").unwrap()["status"]
+        v["data"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"] == ".env")
+            .unwrap()["status"]
             .as_str()
             .unwrap()
             .to_string()
@@ -186,17 +218,26 @@ fn env_sync_copied_kept_force() {
     let (code, v) = sb.json(&["env", "sync", s(&wt)]);
     assert_eq!(code, 0);
     assert_eq!(status(&v), "copied");
-    assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1\n");
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".env")).unwrap(),
+        "SECRET=1\n"
+    );
     // (b) both differ -> kept + warning
     write(&sb.main.join(".env"), "SECRET=main\n");
     write(&wt.join(".env"), "SECRET=wt\n");
     let (_, v) = sb.json(&["env", "sync", s(&wt)]);
     assert_eq!(status(&v), "kept");
     assert!(!v["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=wt\n");
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".env")).unwrap(),
+        "SECRET=wt\n"
+    );
     let (_, v) = sb.json(&["env", "sync", s(&wt), "--force"]);
     assert_eq!(status(&v), "overwritten");
-    assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=main\n");
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".env")).unwrap(),
+        "SECRET=main\n"
+    );
 }
 
 #[test]
@@ -227,8 +268,17 @@ fn hydrate_dry_run_writes_nothing() {
     let (code, v) = sb.json(&["hydrate", "--dry-run", s(&wt)]);
     assert_eq!(code, 0);
     let entries = v["data"]["entries"].as_array().unwrap();
-    let action = |p: &str| entries.iter().find(|e| e["path"] == p).map(|e| e["action"].as_str().unwrap().to_string());
-    assert_eq!(action("node_modules/").as_deref(), Some("would_clone"), "{v}");
+    let action = |p: &str| {
+        entries
+            .iter()
+            .find(|e| e["path"] == p)
+            .map(|e| e["action"].as_str().unwrap().to_string())
+    };
+    assert_eq!(
+        action("node_modules/").as_deref(),
+        Some("would_clone"),
+        "{v}"
+    );
     assert_eq!(action(".env").as_deref(), Some("would_copy"), "{v}");
     assert!(!wt.join(".env").exists());
     assert!(!wt.join("node_modules").exists());
@@ -237,13 +287,21 @@ fn hydrate_dry_run_writes_nothing() {
 #[test]
 fn shell_init_zsh() {
     let sb = Sandbox::new();
-    sb.cmd().args(["shell-init", "zsh"]).assert().success().stdout(predicate::str::contains("command cmw path"));
+    sb.cmd()
+        .args(["shell-init", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("command cmw path"));
 }
 
 #[test]
 fn skill_print_and_install() {
     let sb = Sandbox::new();
-    sb.cmd().args(["skill", "print"]).assert().success().stdout(predicate::str::contains("--json"));
+    sb.cmd()
+        .args(["skill", "print"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--json"));
     let dir = sb.root.join("skills/cmw");
     let (code, v) = sb.json(&["skill", "install", "--dir", s(&dir)]);
     assert_eq!(code, 0);
@@ -267,9 +325,19 @@ fn hook_claude_create() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = stdout(&out);
     let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap();
     let p = std::path::Path::new(last);
@@ -282,8 +350,18 @@ fn hook_claude_create() {
 fn concurrent_new() {
     let sb = Sandbox::new();
     let (a, b) = (sb.wt("wa"), sb.wt("wb"));
-    let c1 = sb.std_cmd(&["new", "feat/a", "--path", s(&a)]).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-    let c2 = sb.std_cmd(&["new", "feat/b", "--path", s(&b)]).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let c1 = sb
+        .std_cmd(&["new", "feat/a", "--path", s(&a)])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let c2 = sb
+        .std_cmd(&["new", "feat/b", "--path", s(&b)])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     for c in [c1, c2] {
         let o = c.wait_with_output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -296,10 +374,18 @@ fn concurrent_new() {
 #[test]
 fn shell_init_stays_raw_with_cmw_json() {
     let sb = common::Sandbox::new();
-    let out = sb.cmd().env("CMW_JSON", "1").args(["shell-init", "zsh"]).output().unwrap();
+    let out = sb
+        .cmd()
+        .env("CMW_JSON", "1")
+        .args(["shell-init", "zsh"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
-    assert!(text.contains("command cmw path"), "expected raw script, got: {text}");
+    assert!(
+        text.contains("command cmw path"),
+        "expected raw script, got: {text}"
+    );
     assert!(!text.trim_start().starts_with('{'));
 }
 
@@ -310,7 +396,12 @@ fn rm_refuses_worktree_with_missing_git_file() {
     write(&wt.join("precious"), "keep me\n");
     std::fs::remove_file(wt.join(".git")).unwrap();
     let out = sb.run(&["rm", "feat/broken"]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
     assert!(wt.join("precious").exists());
 }

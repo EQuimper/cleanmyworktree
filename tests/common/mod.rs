@@ -44,10 +44,16 @@ pub fn init_repo(dir: &Path) {
     git(dir, &["config", "user.email", "test@example.com"]);
     git(dir, &["config", "commit.gpgsign", "false"]);
     write(&dir.join("README.md"), "hello\n");
-    write(&dir.join(".gitignore"), "node_modules/\n.env\nbuild/\nios/\n");
+    write(
+        &dir.join(".gitignore"),
+        "node_modules/\n.env\nbuild/\nios/\n",
+    );
     git(dir, &["add", "."]);
     git(dir, &["commit", "-q", "-m", "init"]);
-    write(&dir.join("node_modules/pkg/index.js"), "module.exports = 1;\n");
+    write(
+        &dir.join("node_modules/pkg/index.js"),
+        "module.exports = 1;\n",
+    );
     write(&dir.join(".env"), "SECRET=1\n");
     write(&dir.join("build/out.txt"), "out\n");
 }
@@ -64,7 +70,14 @@ impl Sandbox {
         }
         let main = root.join("main");
         init_repo(&main);
-        Sandbox { tmp, root, home, cmw_home, scan, main }
+        Sandbox {
+            tmp,
+            root,
+            home,
+            cmw_home,
+            scan,
+            main,
+        }
     }
 
     pub fn wt(&self, name: &str) -> PathBuf {
@@ -110,8 +123,12 @@ impl Sandbox {
         let mut a = vec!["--json"];
         a.extend_from_slice(args);
         let out = self.run(&a);
-        let v: Value = serde_json::from_slice(&out.stdout)
-            .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {}", String::from_utf8_lossy(&out.stdout)));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "stdout not JSON ({e}): {}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        });
         (out.status.code().unwrap(), v)
     }
 
@@ -121,7 +138,11 @@ impl Sandbox {
         let mut a = vec!["new", branch, "--path", p.to_str().unwrap()];
         a.extend_from_slice(extra);
         let out = self.run(&a);
-        assert!(out.status.success(), "cmw new failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "cmw new failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         p
     }
 
@@ -135,7 +156,10 @@ impl Sandbox {
     /// Commit on feat branch in worktree, then merge into main with --no-ff.
     pub fn merge_branch(&self, wt: &Path, branch: &str) {
         self.commit(wt, "feature.txt", "feature\n", "feat work");
-        git(&self.main, &["merge", "--no-ff", "-q", "-m", "merge", branch]);
+        git(
+            &self.main,
+            &["merge", "--no-ff", "-q", "-m", "merge", branch],
+        );
     }
 }
 
