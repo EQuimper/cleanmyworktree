@@ -318,6 +318,18 @@ pub fn hydrate(
         }
     }
 
+    // Post hooks are arbitrary commands and may rewrite dependency dirs. Withdraw all records
+    // durably while they run, then restore only those whose dep dir is provably untouched
+    // (same inode and mtime). Limitation: edits deep inside a dep dir that leave its top-level
+    // mtime unchanged are not detected; hooks are expected not to mutate dependencies.
+    let mut held: Vec<(String, String, Option<DirStamp>)> = Vec::new();
+    if !dry_run && !cfg.post_hydrate.is_empty() && !state.installs.is_empty() {
+        for (k, v) in std::mem::take(&mut state.installs) {
+            let stamp = record_dep_rel(&k).and_then(|rel| dir_stamp(&target.join(rel)));
+            held.push((k, v, stamp));
+        }
+        write_state(target, source, state.raw.clone(), &state.installs)?;
+    }
     if !dry_run {
         for cmd in &cfg.post_hydrate {
             ctx.progress(format!("post-hydrate: {cmd}"));
@@ -340,6 +352,18 @@ pub fn hydrate(
                     ready = false;
                 }
             }
+        }
+    }
+
+    for (k, v, stamp) in held {
+        let unchanged = match (&stamp, record_dep_rel(&k)) {
+            (Some(before), Some(rel)) => dir_stamp(&target.join(rel)).as_ref() == Some(before),
+            // No dep dir (e.g. Gemfile.lock): nothing a hook could have swapped out.
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            state.installs.insert(k, v);
         }
     }
 
@@ -460,6 +484,25 @@ fn symlink_ancestor(root: &Path, dst: &Path) -> Option<PathBuf> {
 
 fn parent_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(p, _)| p)
+}
+
+/// Repo-relative dep dir a provenance key (`<dir>|<lockfile>`) describes, if its installer has one.
+fn record_dep_rel(key: &str) -> Option<String> {
+    let (dir, lockfile) = key.split_once('|')?;
+    let inst = rules::installers()
+        .iter()
+        .find(|i| i.lockfile == lockfile)?;
+    inst.dep_dir.map(|d| join_rel(dir, d))
+}
+
+/// Identity of a directory for change detection: device, inode and mtime.
+#[derive(PartialEq, Eq)]
+struct DirStamp(u64, u64, i64, i64);
+
+fn dir_stamp(path: &Path) -> Option<DirStamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some(DirStamp(m.dev(), m.ino(), m.mtime(), m.mtime_nsec()))
 }
 
 /// Whether the dep dir described by a provenance key (`<dir>|<lockfile>`) exists in `target`.
@@ -681,9 +724,11 @@ fn run_install(
         item.status = "would_run";
         return item;
     }
-    // Drop the record durably before the installer can touch the deps: a crash or failure must
-    // leave no claim that they match any lockfile.
-    recorded.remove(&key);
+    // Drop every record describing this dep dir (including other installers' keys, e.g. an old
+    // npm record when pnpm now owns node_modules) durably before the installer can touch the
+    // deps: a crash or failure must leave no claim that they match any lockfile.
+    let dep_rel = inst.dep_dir.map(|d| join_rel(&p.dir, d));
+    recorded.retain(|k, _| k != &key && (dep_rel.is_none() || record_dep_rel(k) != dep_rel));
     if let Err(e) = persist(recorded) {
         // Without a durable record removal, a failed install could leave the old record claiming
         // the (now modified) deps still match. Never mutate deps we can't account for.
@@ -1314,5 +1359,75 @@ mod tests {
             !marker.exists(),
             "the installer must not run when record removal can't be persisted"
         );
+    }
+
+    #[test]
+    fn switching_installer_drops_other_records_for_same_dep_dir() {
+        let (_tmp, main, wt, _) = lock_fixture("A");
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
+        fs::write(wt.join("pnpm-lock.yaml"), "B").unwrap();
+        let pnpm: &'static Installer = Box::leak(Box::new(Installer {
+            ecosystem: "node",
+            lockfile: "pnpm-lock.yaml",
+            command: Box::leak(Box::new(["sh", "-c", "true"])),
+            dep_dir: Some("node_modules"),
+            slow: false,
+        }));
+        let p = PlannedInstall {
+            installer: pnpm,
+            dir: String::new(),
+        };
+        let mut rec = BTreeMap::new();
+        rec.insert(
+            "|package-lock.json".to_string(),
+            hash_file(&wt.join("package-lock.json")).unwrap(),
+        );
+        let cloned = HashSet::new();
+        let r = run_install(&env(&main, &wt, &cloned, &noop), &p, &mut rec);
+        assert_eq!(r.status, "ran");
+        assert!(
+            !rec.contains_key("|package-lock.json"),
+            "npm's record must not survive pnpm rewriting node_modules"
+        );
+        assert!(rec.contains_key("|pnpm-lock.yaml"));
+    }
+
+    fn hook_fixture(hook: &str) -> (TempDir, PathBuf, PathBuf) {
+        let (tmp, main, wt, _) = lock_fixture("A");
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
+        fs::write(
+            wt.join(crate::config::FILE_NAME),
+            format!("[hydrate]\npost = [{hook:?}]\n"),
+        )
+        .unwrap();
+        let mut rec = BTreeMap::new();
+        rec.insert(
+            "|package-lock.json".to_string(),
+            hash_file(&wt.join("package-lock.json")).unwrap(),
+        );
+        write_state(&wt, &main, Default::default(), &rec).unwrap();
+        (tmp, main, wt)
+    }
+
+    #[test]
+    fn post_hook_replacing_deps_invalidates_record() {
+        let (_tmp, main, wt) = hook_fixture("rm -rf node_modules && mkdir node_modules");
+        let flags = InstallFlags {
+            no_install: true,
+            no_slow: false,
+        };
+        hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert!(read_state(&wt).installs.is_empty());
+    }
+
+    #[test]
+    fn harmless_post_hook_keeps_record() {
+        let (_tmp, main, wt) = hook_fixture("true");
+        let flags = InstallFlags {
+            no_install: true,
+            no_slow: false,
+        };
+        hydrate(&ctx(), &main, &wt, false, flags).unwrap();
+        assert!(read_state(&wt).installs.contains_key("|package-lock.json"));
     }
 }
