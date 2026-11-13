@@ -4,12 +4,13 @@ import '@fontsource-variable/martian-mono/index.css';
 import '../styles/shared.css';
 import '../styles/site.css';
 import Duel from '../components/Duel.astro';
+import og from '../assets/og.png';
 import { agentPrompt, brewInstall, repo, version } from '../lib/release';
 
 const title = 'cmw: fast, disk-cheap git worktrees for humans and AI agents';
 const description =
   'cmw fills new git worktrees with your node_modules, Pods and .env as copy-on-write clones of your main checkout. Ready in seconds, almost no extra disk, and cleanup that never loses work.';
-const image = new URL('/og.png', Astro.site);
+const image = new URL(og.src, Astro.site);
 
 const wt = '~/.cmw/worktrees/shop';
 
@@ -67,8 +68,8 @@ const contract = [
     <meta property="og:description" content={description} />
     <meta property="og:url" content={Astro.site} />
     <meta property="og:image" content={image} />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
+    <meta property="og:image:width" content={og.width} />
+    <meta property="og:image:height" content={og.height} />
     <meta property="og:image:alt" content="cmw: Worktrees in seconds, not gigabytes. brew install equimper/tap/cmw" />
     <meta name="twitter:card" content="summary_large_image" />
     <script is:inline>document.documentElement.classList.add('js');</script>
