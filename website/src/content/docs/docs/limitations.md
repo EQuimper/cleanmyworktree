@@ -3,9 +3,17 @@ title: Limitations
 description: Known limitations of cmw v0.1.
 ---
 
-## macOS only
+## Filesystems
 
-cmw v0.1 targets macOS and APFS. On other filesystems, or across volumes, it falls back to a plain copy and warns about the full disk cost. Linux reflink support is planned.
+| Filesystem | Clone method |
+| --- | --- |
+| APFS (macOS) | clonefile |
+| Btrfs, bcachefs | reflink |
+| XFS (reflink=1, default since xfsprogs 5.1) | reflink |
+| ZFS ≥ 2.2 (block cloning enabled) | reflink |
+| ext4, tmpfs, across filesystems | plain copy + warning |
+
+Linux clones each file individually, which keeps pace with `cp --reflink`: a 1.6 GB, 96k-file `node_modules` takes about 1 s on XFS and 1.8 s on Btrfs.
 
 ## The first hydrate of an existing worktree runs one install
 
@@ -25,4 +33,4 @@ If a `[hydrate] post` command replaces `node_modules`, `Pods`, `vendor` or `.ven
 
 ## Report a problem
 
-Open an issue on [GitHub](https://github.com/EQuimper/cleanmyworktree/issues) with the command, its `--json` output and your macOS version.
+Open an issue on [GitHub](https://github.com/EQuimper/cleanmyworktree/issues) with the command, its `--json` output and your operating system version.

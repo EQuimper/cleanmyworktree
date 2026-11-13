@@ -23,4 +23,4 @@ cmw moves a worktree into a trash folder on the same volume, which is instant, t
 
 ## Other filesystems
 
-Copy-on-write needs APFS on macOS. On another filesystem, or when the worktree is on a different volume from the main checkout, cmw falls back to a plain copy and warns that it uses full disk space.
+Copy-on-write works on APFS and supported Linux filesystems. See [filesystem limitations](/docs/limitations/). On unsupported filesystems or across volumes, cmw falls back to a plain copy and warns that it uses full disk space.

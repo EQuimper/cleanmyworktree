@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-reflink-000?logo=linux&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-APFS-000?logo=apple&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/built_with-Rust-000?logo=rust&logoColor=white">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4ef2a0">
@@ -47,7 +48,7 @@ brew install equimper/tap/cmw
 eval "$(cmw shell-init zsh)"   # optional: `cmw cd <name>`, and Open in `cmw` changes directory; put it in ~/.zshrc
 ```
 
-macOS only for v0.1. Other options, including bash and fish, are in the [install guide](https://cmw.equimper.com/docs/install/).
+Available for macOS and Linux. Other options, including bash and fish, are in the [install guide](https://cmw.equimper.com/docs/install/).
 
 ## Quick start
 
@@ -186,11 +187,21 @@ Pasted into T3 Code, the prompt also adds `cmw hydrate` as the worktree setup sc
 
 ## Disk usage, honestly
 
-Copy-on-write clones fool `du`: each clone is reported at full size even though the blocks are shared. That's why `cmw ls --sizes` shows *apparent* size. `gc --yes` and `clean-artifacts --yes` report `freed_bytes` from the change in free disk space, which is the only number that reflects reality on APFS.
+Copy-on-write clones fool `du`: each clone is reported at full size even though the blocks are shared. That's why `cmw ls --sizes` shows *apparent* size. `gc --yes` and `clean-artifacts --yes` report `freed_bytes` from the change in free disk space, which is the only number that reflects reality on copy-on-write filesystems.
 
 ## Known limitations (v0.1)
 
-- **macOS only.** On other filesystems, or across volumes, cmw falls back to a plain copy and warns about the full disk cost.
+- On unsupported filesystems or across volumes, cmw falls back to a plain copy and warns about the full disk cost.
+
+| Filesystem | Clone method |
+| --- | --- |
+| APFS (macOS) | clonefile |
+| Btrfs, bcachefs | reflink |
+| XFS (reflink=1, default since xfsprogs 5.1) | reflink |
+| ZFS ≥ 2.2 (block cloning enabled) | reflink |
+| ext4, tmpfs, across filesystems | plain copy + warning |
+
+Linux clones each file individually, which keeps pace with `cp --reflink`: a 1.6 GB, 96k-file `node_modules` takes about 1 s on XFS and 1.8 s on Btrfs.
 - **First hydrate of an existing worktree runs one install.** cmw only skips an install when it can prove which lockfile built the dependencies. For a worktree made by another tool, the first hydrate runs the package manager once, typically 1–2 s for npm on an up-to-date tree. `pod install` is reported as `needs_setup` under `--no-slow`.
 - **Post hooks that edit inside dependency folders aren't detected.** If a `[hydrate] post` command replaces `node_modules` (or `Pods`, `vendor`, `.venv`), cmw notices and reports `needs_setup`. Patching individual files inside those folders goes unnoticed. If your hooks patch dependencies, re-run the package manager after them.
 - **Merge detection is conservative.** `git branch --merged` misses squash merges, so cmw falls back to patch-id comparison and the `gh` CLI. A branch counts as merged only when one of those checks proves it. A branch with no commits of its own is never treated as merged, and anything unproven is kept.

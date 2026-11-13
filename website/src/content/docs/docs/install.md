@@ -3,9 +3,11 @@ title: Install
 description: Install cmw with Homebrew or the shell installer, and add cmw cd to your shell.
 ---
 
-cmw is a single binary for macOS on Apple silicon and Intel.
+cmw is a single binary for macOS and Linux on ARM64 and x86-64.
 
 ## Homebrew
+
+Homebrew uses the same tap on macOS and Linux.
 
 ```sh
 brew install equimper/tap/cmw

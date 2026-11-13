@@ -8,7 +8,7 @@ export const summary =
   'cmw makes git worktrees fast to create, cheap on disk, and safe to clean up. It fills a new worktree with the main checkout’s gitignored files: dependencies like node_modules, Pods and vendor become copy-on-write clones, and .env files are copied. A worktree is ready in seconds and costs almost no extra disk. Cleanup removes build caches with the worktree and never deletes uncommitted or unmerged work.';
 
 export const facts = [
-  `Install: \`${brewInstall}\`. Version ${version}, a single binary for macOS (Apple silicon and Intel), written in Rust. MIT license.`,
+  `Install: \`${brewInstall}\`. Version ${version}, a single binary for macOS and Linux (ARM64 and x86-64), written in Rust. MIT license.`,
   'Main commands: `cmw new <branch>` creates and hydrates a worktree, `cmw hydrate` fills an existing one, `cmw ls` lists worktrees, `cmw cd <name>` jumps into one, `cmw rm` and `cmw gc` clean up, and `cmw` alone opens an interactive screen.',
   'Built for AI agents: `--json` on every command, stable exit codes, no prompts, fix hints on every refusal. Works with Claude Code, Codex, Grok and T3 Code.',
   `Source: ${repo}`,

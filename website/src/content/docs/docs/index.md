@@ -9,7 +9,7 @@ To see it before installing, [try it in your browser](/#try).
 
 ## Install
 
-cmw runs on macOS, on Apple silicon and Intel.
+cmw runs on macOS and Linux, on ARM64 and x86-64.
 
 ```sh
 brew install equimper/tap/cmw

@@ -1,6 +1,6 @@
-Set up cmw on this Mac for you and my other coding agents. cmw fills git worktrees with copy-on-write clones of node_modules, Pods, .env and other ignored files from the main checkout. Docs: https://cmw.equimper.com/docs/agents/
+Set up cmw on this machine for you and my other coding agents. cmw fills git worktrees with copy-on-write clones of node_modules, Pods, .env and other ignored files from the main checkout. Docs: https://cmw.equimper.com/docs/agents/
 
-1. Run `cmw --version`. If cmw is missing, run `brew install equimper/tap/cmw`. If Homebrew is missing too, stop and ask me.
+1. Run `cmw --version`. If cmw is missing, run `brew install equimper/tap/cmw`. If Homebrew is missing too, stop and ask me whether to use the shell installer: `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EQuimper/cleanmyworktree/releases/latest/download/cmw-installer.sh | sh`.
 2. Run `cmw agents install --json`. It installs the cmw skill for every agent it finds (Claude Code, Codex, Grok). Then run `cmw agents --json` and check that each skill is `installed`.
 3. If you have the T3 Code tools (t3_project_list, t3_project_read, t3_project_update), make every T3 project run `cmw hydrate` on each new worktree:
    - Call t3_project_list, then t3_project_read for each project.

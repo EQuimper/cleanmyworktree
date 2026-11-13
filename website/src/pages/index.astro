@@ -62,7 +62,7 @@ const schema = {
   url: Astro.site,
   image: image.href,
   applicationCategory: 'DeveloperApplication',
-  operatingSystem: 'macOS',
+  operatingSystem: 'macOS, Linux',
   softwareVersion: version,
   license: 'https://opensource.org/licenses/MIT',
   downloadUrl: `${repo}/releases`,
@@ -296,7 +296,7 @@ const schema = {
         <button type="button" data-copy={brewInstall}>Copy</button>
       </div>
       <button type="button" class="prompt-copy" data-copy={agentPrompt}>Copy agent prompt</button>
-      <p>Version {version} for macOS on Apple silicon and Intel. Free and open source under the MIT License.</p>
+      <p>Version {version} for macOS and Linux on ARM64 and x86-64. Free and open source under the MIT License.</p>
       <nav aria-label="Footer">
         <a href="/docs/">Docs</a>
         <a href={repo}>GitHub</a>
