@@ -132,7 +132,7 @@ cmw agents                     # what's installed
 cmw hook claude --install      # optional: Claude Code's own worktrees go through cmw
 ```
 
-Pasted into T3 Code, the prompt also adds `cmw hydrate` as the worktree setup script of every T3 project.
+Pasted into T3 Code, the prompt also adds `cmw hydrate` as the worktree setup script of every T3 project. The script runs in the background (`"async": true`), so the agent starts right away instead of waiting for hydrate.
 
 ## Disk usage, honestly
 

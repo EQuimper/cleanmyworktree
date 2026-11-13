@@ -45,6 +45,8 @@ cmw skill print --agents-md >> AGENTS.md
 
 Make `cmw hydrate` the worktree setup script, so every new T3 worktree gets its dependencies and `.env` in seconds. In T3 Code, add a project script with the command `cmw hydrate` and set it to run when a worktree is created. Pasted into a T3 thread, the prompt above does this for every project.
 
+Leave "Wait for it to finish before the agent starts" off (`"async": true` in the script). The agent then starts right away while hydrate runs in the background, and hydrate is done in a couple of seconds, before the agent's first command. With the option on, the agent also waits for your shell to start, which can take far longer than hydrate on a busy machine.
+
 `cmw ls --all`, `cmw gc --all` and `cmw clean-artifacts --all` include `~/.t3/worktrees` automatically.
 
 ### Codex app
