@@ -52,6 +52,26 @@ const contract = [
   ['Idempotent', 'Run new or hydrate again any time. Same branch, same path.'],
   ['Parallel-safe', 'A lock per repo serializes concurrent runs.'],
 ];
+
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'cmw',
+  alternateName: 'cleanmyworktree',
+  description,
+  url: Astro.site,
+  image: image.href,
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'macOS',
+  softwareVersion: version,
+  license: 'https://opensource.org/licenses/MIT',
+  downloadUrl: `${repo}/releases`,
+  installUrl: new URL('/docs/install/', Astro.site).href,
+  softwareHelp: { '@type': 'CreativeWork', url: new URL('/docs/', Astro.site).href },
+  sameAs: [repo],
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  author: { '@type': 'Person', name: 'Emanuel Quimper', url: 'https://equimper.com' },
+};
 ---
 
 <!doctype html>
@@ -74,6 +94,8 @@ const contract = [
     <meta property="og:image:height" content={og.height} />
     <meta property="og:image:alt" content="cmw: Worktrees in seconds, not gigabytes. brew install equimper/tap/cmw" />
     <meta name="twitter:card" content="summary_large_image" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    <script type="application/ld+json" set:html={JSON.stringify(schema)} />
     <script is:inline>document.documentElement.classList.add('js');</script>
   </head>
   <body>
