@@ -148,13 +148,7 @@ Copy-on-write clones fool `du`: each clone is reported at full size even though 
 
 ## Documentation
 
-The full docs live at **[cmw.equimper.com](https://cmw.equimper.com/docs/)**. The site's source is in [`website/`](website/) (Astro + Starlight, deployed on Netlify):
-
-```sh
-cd website
-npm install
-npm run dev
-```
+The full docs live at **[cmw.equimper.com](https://cmw.equimper.com/docs/)**.
 
 ## License
 
