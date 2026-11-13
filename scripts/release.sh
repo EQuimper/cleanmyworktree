@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a cmw release: bump the version, verify, commit, tag, push.
-# The tag push starts .github/workflows/release.yml (dist), which builds the macOS binaries,
+# The tag push starts .github/workflows/release.yml (dist), which builds the macOS and Linux binaries,
 # creates the GitHub release and publishes the formula to EQuimper/homebrew-tap.
 #
 #   scripts/release.sh <patch|minor|major|X.Y.Z> [--dry-run]
