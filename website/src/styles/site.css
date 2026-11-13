@@ -20,6 +20,7 @@ body {
   --inline: max(clamp(16px, 4vw, 56px), calc((100% - 1240px) / 2));
   --gap: clamp(1.5rem, 4.5vw, 4rem);
   --node: 22px;
+  --h2: clamp(2rem, 4.6vw, 3.75rem);
   margin: 0;
   background: var(--paper);
   color: var(--ink);
@@ -56,7 +57,7 @@ h2 {
 
 h2 {
   max-width: 20ch;
-  font-size: clamp(2rem, 4.6vw, 3.75rem);
+  font-size: var(--h2);
 }
 
 h3 {
@@ -159,6 +160,56 @@ main > .stop::after {
 
 .end .node::after {
   bottom: calc(100% - 0.5lh);
+}
+
+/* A branch forks off at each section's node and merges back before the next.
+   It needs room between the rail and the text, so only wide screens get it. */
+.lane {
+  display: none;
+}
+
+@media (min-width: 64rem) {
+  .lane {
+    position: absolute;
+    top: calc(clamp(4rem, 8vw, 7rem) + var(--h2) / 2);
+    bottom: calc(clamp(4rem, 8vw, 7rem) / 2);
+    left: calc(var(--inline) + var(--node) / 2 - 1.5px);
+    display: flex;
+    flex-direction: column;
+    width: 35px;
+    color: var(--rail);
+    pointer-events: none;
+  }
+}
+
+.lane svg {
+  display: block;
+  width: 35px;
+  height: 40px;
+  flex: none;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+}
+
+.lane i {
+  flex: 1;
+  width: 3px;
+  margin-left: 32px;
+  background: currentColor;
+}
+
+.lane::before {
+  content: '';
+  position: absolute;
+  top: 40px;
+  left: 25.5px;
+  width: 16px;
+  height: 16px;
+  border: 3px solid currentColor;
+  border-radius: 50%;
+  background: var(--surface);
 }
 
 .body {
@@ -1407,6 +1458,16 @@ main .node.in::before {
       animation-range: cover 40vh cover calc(100% - 60vh);
     }
 
+    /* Branches draw top-down with the same head as the rail. Clipping keeps
+       the curves exact at any section height. */
+    .lane {
+      animation-name: branch-draw;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: cover 40vh cover calc(100% - 60vh);
+    }
+
     /* Room for the last node to scroll up to the head on tall screens. */
     .end {
       min-height: calc(40vh + clamp(4rem, 8vw, 7rem) + 3rem);
@@ -1470,5 +1531,14 @@ main .node.in::before {
 @keyframes rail-draw {
   to {
     background-size: 100% 100%;
+  }
+}
+
+@keyframes branch-draw {
+  from {
+    clip-path: inset(0 -20px 100% -20px);
+  }
+  to {
+    clip-path: inset(0 -20px 0 -20px);
   }
 }

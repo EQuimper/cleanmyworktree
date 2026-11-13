@@ -3,6 +3,7 @@ import '@fontsource-variable/archivo/wdth.css';
 import '@fontsource-variable/martian-mono/index.css';
 import '../styles/shared.css';
 import '../styles/site.css';
+import Branch from '../components/Branch.astro';
 import Duel from '../components/Duel.astro';
 import Playground from '../components/Playground.astro';
 import og from '../assets/og.png';
@@ -115,6 +116,7 @@ const contract = [
       <section id="try" class="stop try" aria-labelledby="try-title">
         <h2 id="try-title" class="node">Try it in your browser</h2>
         <Playground />
+        <Branch />
       </section>
 
       <section class="stop gaps" aria-labelledby="gaps-title">
@@ -135,6 +137,7 @@ const contract = [
             ))
           }
         </div>
+        <Branch />
       </section>
 
       <section class="stop cow" aria-labelledby="cow-title">
@@ -174,6 +177,7 @@ const contract = [
         <p class="aside">
           <code>du</code> and Finder count every clone at full size. cmw measures what it frees from the disk itself. <a href="/docs/disk/">Disk usage</a>
         </p>
+        <Branch />
       </section>
 
       <section class="stop rules" aria-labelledby="rules-title">
@@ -197,6 +201,7 @@ const contract = [
           Then cmw compares each lockfile with main’s. If it matches, nothing installs. If it differs, cmw runs your usual install with npm, pnpm, yarn, bun, Composer, CocoaPods, uv or poetry. Add your own rules in <code>.cmw.toml</code>.
         </p>
         <a class="more" href="/docs/hydrate/">How hydrate works</a>
+        <Branch />
       </section>
 
       <section class="stop safe" aria-labelledby="safe-title">
@@ -219,6 +224,7 @@ const contract = [
           </div>
         </div>
         <a class="more" href="/docs/cleanup/">Cleanup rules</a>
+        <Branch />
       </section>
 
       <section class="stop agents" aria-labelledby="agents-title">
@@ -257,6 +263,7 @@ const contract = [
           </div>
         </div>
         <a class="more" href="/docs/agents/">Use cmw with agents</a>
+        <Branch />
       </section>
     </main>
 
