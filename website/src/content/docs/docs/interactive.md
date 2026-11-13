@@ -76,11 +76,11 @@ cmw › Worktrees   shop
 
 `Enter` changes your shell's directory only with [shell integration](/docs/install/#add-cmw-cd). Without it, cmw prints the path when it quits and copies it to the clipboard.
 
-`D` asks before removing. If the worktree has uncommitted changes or unpushed commits, cmw refuses like [`cmw rm`](/docs/cleanup/#remove-one-worktree) does, then offers to force it: type the branch name to confirm that the work should be deleted.
+`D` asks before removing. If the worktree has uncommitted changes, or commits that are both unpushed and unmerged, cmw refuses like [`cmw rm`](/docs/cleanup/#remove-one-worktree) does, then offers to force it: type the branch name to confirm that the work should be deleted.
 
 ## New
 
-Two fields, the branch and its base. Leave the base empty to start from `origin/<default-branch>`. The line below shows where the worktree will go.
+Two fields, the branch and its base. The base only matters for a new branch: leave it empty to start from `origin/<default-branch>`, or the local default branch when there's no remote. A branch that already exists, locally or on `origin`, is checked out as it is. The line below shows where the worktree will go.
 
 | Key | Action |
 | --- | --- |

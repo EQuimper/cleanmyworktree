@@ -667,12 +667,58 @@ fn website_playground_matches_cli() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let run = |args: Vec<&str>| {
         let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("cmw"))
-            .args(args)
+            .args(&args)
             .env_remove("CMW_JSON")
             .output()
             .unwrap();
+        assert!(out.status.success(), "cmw {args:?} failed");
         stdout(&out).trim_end().to_string()
     };
+    // The playground reads these keys; the script and this list must agree.
+    let keys = |section: &str| {
+        let mut k: Vec<&str> = saved[section]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        k.sort_unstable();
+        k
+    };
+    let mut help = vec![
+        "",
+        "agents",
+        "agents install",
+        "agents prompt",
+        "clean-artifacts",
+        "env",
+        "env sync",
+        "gc",
+        "hook",
+        "hook claude",
+        "hydrate",
+        "ls",
+        "new",
+        "path",
+        "rm",
+        "shell-init",
+        "skill",
+        "skill install",
+        "skill print",
+        "update",
+    ];
+    help.sort_unstable();
+    assert_eq!(keys("help"), help, "help commands in cli-snapshot.json");
+    let mut output = vec![
+        "hook claude",
+        "shell-init bash",
+        "shell-init fish",
+        "shell-init zsh",
+        "skill print",
+        "skill print --agents-md",
+    ];
+    output.sort_unstable();
+    assert_eq!(keys("output"), output, "outputs in cli-snapshot.json");
     for (cmd, entry) in saved["help"].as_object().unwrap() {
         let args = |flag| cmd.split_whitespace().chain([flag]).collect::<Vec<_>>();
         let long = entry["long"].as_str().unwrap();

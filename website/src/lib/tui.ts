@@ -96,32 +96,41 @@ export class Tui {
   private sizedAt = 0;
   private slimAt = 0;
   private readonly here: string;
+  /** Where cmw is running: the shell's directory, or `-C <dir>`. */
+  private at: string;
+  /** Set when the worktree cmw started in is removed, so the shell lands somewhere that exists. */
+  private cdOnExit?: string;
 
   constructor(
     private readonly sim: Sim,
+    cwd: string,
     private readonly onChange: () => void,
     private readonly onQuit: (cd?: string) => void,
     private readonly onCopy: (text: string) => void,
     private readonly snippet: string,
   ) {
-    this.here = sim.cwd;
+    this.here = this.at = cwd;
     this.all = !this.inRepo();
     this.reload();
+  }
+
+  private quit(cd?: string) {
+    this.onQuit(cd ?? this.cdOnExit);
   }
 
   // -- data -----------------------------------------------------------------------------------
 
   inRepo() {
-    return !!this.sim.repoAt(this.sim.cwd);
+    return !!this.sim.repoAt(this.at);
   }
 
   private get repo() {
-    return this.sim.repoAt(this.sim.cwd)?.name;
+    return this.sim.repoAt(this.at)?.name;
   }
 
   /** Anywhere in the pretend tree; commands run from the main checkout when cmw started outside a repo. */
   private get cwd() {
-    return this.inRepo() ? this.sim.cwd : '~/code/shop';
+    return this.inRepo() ? this.at : '~/code/shop';
   }
 
   private reload() {
@@ -194,13 +203,13 @@ export class Tui {
   // -- input ----------------------------------------------------------------------------------
 
   key(k: string, ctrl = false) {
-    if (ctrl && k === 'c') return this.onQuit();
+    if (ctrl && k === 'c') return this.quit();
     if (this.busy) return;
     if (this.modal) return this.modalKey(k);
     if (this.screen === 'new') return this.newKey(k, ctrl);
     if (this.screen === 'worktrees' && this.filtering) return this.filterKey(k);
     const lower = k.length === 1 ? k.toLowerCase() : k;
-    if (lower === 'q') return this.onQuit();
+    if (lower === 'q') return this.quit();
     if (['Escape', 'Backspace', 'ArrowLeft'].includes(k) && this.screen !== 'home' && this.screen !== 'slim') {
       this.filter = '';
       this.screen = 'home';
@@ -290,7 +299,7 @@ export class Tui {
       else if (k.length === 1) m.input += k;
       this.modal = m;
     } else if (k === 'Enter' && m.open) {
-      this.onQuit(m.open);
+      this.quit(m.open);
     }
   }
 
@@ -339,7 +348,7 @@ export class Tui {
 
   private open() {
     const w = this.visible()[this.wtSel];
-    if (w) this.onQuit(w.path);
+    if (w) this.quit(w.path);
   }
 
   private act(op: 'h' | 'e' | 'd') {
@@ -455,7 +464,12 @@ export class Tui {
       const label = a.w.branch;
       return this.run(`Removing ${label}`, 700, () => {
         try {
+          const main = this.sim.mainOf(a.w.repo).path;
           const r = this.sim.remove(a.w.path, a.w.path, { force: a.force });
+          if (this.at === a.w.path || this.at.startsWith(`${a.w.path}/`)) {
+            // We (and the caller's shell) were inside it: carry on from the main checkout.
+            this.at = this.cdOnExit = main;
+          }
           this.say(`Removed ${label}${r.report.branch_deleted ? ' and its branch' : ''}`, 'ok');
           this.wtSel = Math.min(this.wtSel, this.visible().length - 1);
         } catch (e) {
@@ -516,7 +530,7 @@ export class Tui {
     const lines: TLine[] = [];
     const showLogo = h >= LOGO.length + MENU.length + 6;
     const scope = this.all ? 'All repositories' : this.repo!;
-    const branch = this.inRepo() ? this.sim.wtAt(this.sim.cwd)!.branch : '';
+    const branch = this.inRepo() ? this.sim.wtAt(this.at)?.branch ?? '' : '';
     const info: Seg[][] = [[], [seg(scope, 'b')], [seg(branch, 'dim')], [seg(`v${this.sim.version}`, 'faint')], []];
     if (showLogo) {
       const side = w >= LOGO_W + 4 + 20;

@@ -17,6 +17,7 @@ const keys = [
   ['Enter', 'Enter'],
   [' ', 'Space'],
   ['Tab', 'Tab'],
+  ['Backspace', '⌫'],
   ['Escape', 'Esc'],
   ['q', 'Q'],
 ];
@@ -62,7 +63,7 @@ const keys = [
       <span class="measure" data-measure aria-hidden="true">MMMMMMMMMM</span>
     </div>
     <div class="keypad" data-keypad hidden>
-      {keys.map(([key, label]) => <button type="button" data-key={key}>{label}</button>)}
+      {keys.map(([key, label]) => <button type="button" data-key={key} aria-label={key === ' ' ? 'Space' : key}>{label}</button>)}
     </div>
   </div>
   <div class="chips" aria-label="Try a command">

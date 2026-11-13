@@ -176,8 +176,8 @@ if (root) {
     navigator.clipboard?.writeText(text).catch(() => {});
   };
 
-  const openTui = () => {
-    tui = new Tui(sim, draw, closeTui, copy, agentsMd);
+  const openTui = (cwd: string) => {
+    tui = new Tui(sim, cwd, draw, closeTui, copy, agentsMd);
     // The prompt's input stays focusable (and invisible) so keys and virtual keyboards reach the screen.
     root.classList.add('in-tui');
     log.hidden = true;
@@ -220,7 +220,7 @@ if (root) {
       } else if ('out' in e) print(e.out, e.err ? 'line stderr' : 'line');
       else if ('clear' in e) log.replaceChildren();
       else if ('copy' in e) copy(e.copy);
-      else if ('tui' in e) return openTui();
+      else if ('tui' in e) return openTui(e.cwd);
     }
   };
 
@@ -315,11 +315,23 @@ if (root) {
     }
   });
 
-  // Virtual keyboards send text through `input`, not keydown.
+  // Virtual keyboards send text and deletions through `beforeinput`/`input`, not keydown.
+  input.addEventListener('beforeinput', (e) => {
+    if (!tui || !e.inputType.startsWith('delete')) return;
+    e.preventDefault();
+    tui.key('Backspace');
+    draw();
+  });
+
   input.addEventListener('input', () => {
+    const text = input.value;
     if (!tui) return;
-    for (const ch of input.value) tui.key(ch);
     input.value = '';
+    for (const ch of text) {
+      // A key can close the screen (`q`); the rest of a paste goes nowhere.
+      if (!tui) break;
+      tui.key(ch);
+    }
     draw();
   });
 

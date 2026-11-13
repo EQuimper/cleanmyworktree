@@ -13,7 +13,7 @@ export type Line = Seg[];
 export type Ev =
   | { out: Line; err?: boolean }
   | { wait: number }
-  | { tui: true }
+  | { tui: true; cwd: string }
   | { clear: true }
   | { copy: string };
 
@@ -705,7 +705,7 @@ export class Sim {
     if (rest.length === 0) {
       if (wantHelp) return this.print(wantHelp === 'short' ? help[''].short! : help[''].long);
       if (jsonMode || captured) return { evs: textLines(help[''].long).map((l) => ({ out: l, err: true })), code: 2 };
-      return { evs: [{ tui: true }], code: 0 };
+      return { evs: [{ tui: true, cwd }], code: 0 };
     }
     if (first === '-V' || first === '--version') return this.print(`cmw ${this.version}`);
     if (first === 'help') {
@@ -816,8 +816,13 @@ export class Sim {
       }
       case 'agents':
         return this.agents();
+      case 'skill install': {
+        const dir = p.opts.get('--dir');
+        if (dir === undefined) return this.agentsInstall(p);
+        const path = `${this.path(cwd, dir)}/SKILL.md`;
+        return { human: [line(`created ${path}`)], data: { path, status: 'created' } };
+      }
       case 'agents install':
-      case 'skill install':
         return this.agentsInstall(p);
       case 'agents prompt':
         if (p.flags.has('--copy')) {
@@ -849,7 +854,7 @@ export class Sim {
   // -- hydrate ----------------------------------------------------------------------------------
 
   /** hydrate::hydrate, against the pretend tree. Mutates `w` unless `dry`. */
-  hydrate(w: Wt, dry: boolean, made = false) {
+  hydrate(w: Wt, dry: boolean, o: { noInstall?: boolean } = {}) {
     const repo = REPOS.find((r) => r.name === w.repo)!;
     const main = this.mainOf(w.repo);
     const fresh = !w.hydrated;
@@ -861,10 +866,13 @@ export class Sim {
       else action = w.deps ? 'exists' : dry ? 'would_clone' : 'cloned';
       return { path: e.path, strategy: e.strategy, ecosystem: e.ecosystem, action };
     });
-    // The first hydrate of a worktree cmw didn't make can't prove which lockfile built its deps.
-    const status = fresh && !made ? (dry ? 'would_run' : 'ran') : 'up_to_date';
-    const installs = [{ lockfile: repo.lockfile, dir: '', ecosystem: w.repo === 'shop' ? 'node' : 'python', command: repo.install, status }];
-    const ms = dry ? 40 : made ? 1400 + Math.round(Math.random() * 400) : fresh ? (w.deps ? 1900 : 3100) : 280;
+    // Deps cloned now are known to match main's lockfile. Deps that were already there (installed
+    // some other way) can't be vouched for, and a path-bound env is rebuilt: both run the installer.
+    const regen = repo.entries.some((e) => e.strategy === 'regen');
+    const runs = fresh && (w.deps || regen);
+    const status = runs ? (dry ? 'would_run' : 'ran') : 'up_to_date';
+    const installs = o.noInstall ? [] : [{ lockfile: repo.lockfile, dir: '', ecosystem: w.repo === 'shop' ? 'node' : 'python', command: repo.install, status }];
+    const ms = dry ? 40 : (fresh ? 1400 + Math.round(Math.random() * 400) : 280) + (runs && !o.noInstall ? 1300 : 0);
     if (!dry) {
       if (!w.deps) {
         w.deps = true;
@@ -924,39 +932,54 @@ export class Sim {
     const target = p.pos[0] ? this.path(cwd, p.pos[0]) : cwd;
     this.needRepo(target);
     const w = this.wtAt(target)!;
+    const from = p.opts.get('--from');
+    if (from !== undefined) {
+      const src = this.path(cwd, from);
+      if (!this.isDir(src)) throw new CmwError('not_found', 'No such file or directory (os error 2)');
+      if (this.wtAt(src) === w) throw new CmwError('refused', 'target is the main checkout', 'cmw hydrate <worktree-path>');
+      if (this.wtAt(src) !== this.mainOf(w.repo)) throw new CmwError('error', `${src}: only the main checkout has dependencies in the playground`);
+    }
     if (w.main) throw new CmwError('refused', 'target is the main checkout', 'cmw hydrate <worktree-path>');
-    const { report, ms } = this.hydrate(w, p.flags.has('--dry-run'));
+    const { report, ms } = this.hydrate(w, p.flags.has('--dry-run'), { noInstall: p.flags.has('--no-install') });
     return { human: this.summary(report, true), data: report, wait: ms };
   }
 
   // -- new --------------------------------------------------------------------------------------
 
   /** Create (or find) the worktree for `branch`. Shared with the interactive screen. */
-  create(cwd: string, branch: string, o: { base?: string; path?: string; noHydrate?: boolean } = {}) {
+  create(cwd: string, branch: string, o: { base?: string; path?: string; noHydrate?: boolean; noInstall?: boolean } = {}) {
     const repo = this.needRepo(cwd);
     if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) || branch.includes('..') || branch.endsWith('/') || branch.endsWith('.lock')) {
       throw new CmwError('error', `git worktree add failed: fatal: '${branch}' is not a valid branch name`);
     }
     const existing = this.wts.find((w) => w.repo === repo.name && w.branch === branch);
     if (existing) {
-      const h = o.noHydrate || existing.main ? undefined : this.hydrate(existing, false);
+      const h = o.noHydrate || existing.main ? undefined : this.hydrate(existing, false, o);
       return { w: existing, created: false, base: null, hydrate: h };
     }
     const path = o.path ? this.path(cwd, o.path) : `~/.cmw/worktrees/${repo.name}/${slugify(branch)}`;
     if (this.isDir(path)) throw new CmwError('refused', `${path} already exists and is not a worktree of ${repo.name}`, `cmw new ${branch} --path <other-dir>`);
-    const reused = this.branches.delete(branch);
+    const reused = this.branches.has(branch);
     const base = reused ? null : (o.base ?? 'origin/main');
+    if (base !== null && !this.refs(repo.name).has(base)) {
+      throw new CmwError('error', `git worktree add -b ${branch} ${path} ${base} failed: fatal: invalid reference: ${base}`);
+    }
+    this.branches.delete(branch);
     const main = this.mainOf(repo.name);
     const w = wt(repo.name, branch, { path, hydrated: false, deps: false, env: null, bytes: 6.2 * MB, own: 6.2 * MB, head: main.head });
     this.wts.push(w);
     let h: ReturnType<Sim['hydrate']> | undefined;
-    // cmw made it, so the cloned lockfile is known to match: nothing installs.
-    if (!o.noHydrate) h = this.hydrate(w, false, true);
+    if (!o.noHydrate) h = this.hydrate(w, false, o);
     return { w, created: true, base, hydrate: h };
   }
 
   private new(p: Parsed, cwd: string) {
-    const r = this.create(cwd, p.pos[0], { base: p.opts.get('--base'), path: p.opts.get('--path'), noHydrate: p.flags.has('--no-hydrate') });
+    const r = this.create(cwd, p.pos[0], {
+      base: p.opts.get('--base'),
+      path: p.opts.get('--path'),
+      noHydrate: p.flags.has('--no-hydrate'),
+      noInstall: p.flags.has('--no-install'),
+    });
     return {
       stderr: r.hydrate ? this.summary(r.hydrate.report, false) : [],
       human: [line(r.w.path)],
@@ -966,6 +989,12 @@ export class Sim {
   }
 
   // -- ls ---------------------------------------------------------------------------------------
+
+  /** Refs a new branch can start from. */
+  refs(repo: string): Set<string> {
+    const names = [...this.wts.filter((w) => w.repo === repo).map((w) => w.branch), ...(repo === 'shop' ? this.branches : [])];
+    return new Set(['main', 'origin/main', 'HEAD', ...names, ...names.map((n) => `origin/${n}`)]);
+  }
 
   /** The repos a command sees: this one, or every one with --all. */
   scope(cwd: string, all: boolean): Repo[] {
@@ -1251,20 +1280,27 @@ export class Sim {
   }
 
   agentsInstall(p?: Parsed) {
+    const only = p?.opts.get('--agent');
+    if (only !== undefined && !['claude', 'codex', 'grok'].includes(only)) {
+      throw new CmwError('usage', `invalid value '${only}' for '--agent <AGENT>'`, 'cmw agents install --agent claude');
+    }
+    // --refresh only rewrites skills that exist; Grok's is missing until installed.
+    const refresh = p?.flags.has('--refresh') ?? false;
     const grok = this.grok ? 'unchanged' : 'created';
-    this.grok = true;
     const skills = [
       { agent: 'claude', path: '~/.claude/skills/cmw/SKILL.md', status: 'unchanged' },
       { agent: 'codex', path: '~/.agents/skills/cmw/SKILL.md', status: 'unchanged' },
       { agent: 'grok', path: '~/.grok/skills/cmw/SKILL.md', status: grok },
-    ];
+    ].filter((x) => (!only || x.agent === only) && !(refresh && x.status === 'created'));
+    if (skills.some((x) => x.agent === 'grok')) this.grok = true;
     const names: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', grok: 'Grok' };
     const hooks = p?.flags.has('--claude-hooks') ? { path: '~/.claude/settings.json', status: this.hooks ? 'unchanged' : 'added' } : null;
     if (hooks) this.hooks = true;
     const human: Line[] = skills.map((s) => [seg(`${pad(names[s.agent], 12)}  `), seg(pad(s.status, 9), s.status === 'created' ? 'ok' : 'dim'), seg(`  ${s.path}`, 'dim')]);
     if (hooks) human.push([seg(`${pad('Claude hooks', 12)}  `), seg(pad(hooks.status, 9), hooks.status === 'added' ? 'ok' : 'dim'), seg(`  ${hooks.path}`, 'dim')]);
     human.push(line('T3 Code: paste `cmw agents prompt --copy` into a T3 thread to set up worktrees'));
-    return { human, data: { skills, claude_hooks: hooks }, summary: grok === 'created' ? 'Installed the cmw skill for Grok' : 'Agent skills are up to date' };
+    const created = skills.some((x) => x.status === 'created');
+    return { human, data: { skills, claude_hooks: hooks }, summary: created ? 'Installed the cmw skill for Grok' : 'Agent skills are up to date' };
   }
 
   // -- completion -------------------------------------------------------------------------------
