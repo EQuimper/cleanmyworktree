@@ -5,6 +5,8 @@ description: Install cmw and create your first hydrated worktree.
 
 cmw makes git worktrees fast to create, cheap on disk, and safe to clean up. Dependencies like `node_modules`, `Pods` and `vendor` are copy-on-write clones of your main checkout, so a new worktree is ready in seconds and costs almost no extra disk. It's built for people and AI agents running many worktrees in parallel.
 
+To see it before installing, [try it in your browser](/#try-title).
+
 ## Install
 
 cmw runs on macOS, on Apple silicon and Intel.
@@ -42,6 +44,8 @@ cmw ls
 ```
 
 Each row shows the branch, uncommitted changes, whether it's merged, days idle, and whether cmw hydrated it.
+
+Or run `cmw` on its own for the [interactive screen](/docs/interactive/), where you can open, create and clean up worktrees with the arrow keys.
 
 ## Clean up
 

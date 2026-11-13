@@ -9,29 +9,12 @@ description: Every cmw command and flag.
 | --- | --- |
 | `--json` | Print one JSON document on stdout. Same as `CMW_JSON=1`. |
 | `-C <dir>` | Run as if started in `<dir>`, like `git -C`. |
-| `--version` | Print the version. |
-| `--help` | Print help for cmw or any subcommand. |
+| `-V`, `--version` | Print the version. |
+| `-h`, `--help` | Print help for cmw or any subcommand. `-h` prints a shorter summary. `cmw help <command>` works too. |
 
 ## `cmw`
 
-With no arguments in a terminal, cmw opens an interactive screen: browse worktrees with their state and size, open one, create, hydrate, sync env, remove, clean up merged worktrees, slim build caches, and set up shell integration and the agent skill.
-
-| Key | Action |
-| --- | --- |
-| `↑` `↓` / `j` `k` | Move |
-| `Enter` | Open the selected item. On a worktree, `cd` into it (needs [shell integration](/docs/install/#add-cmw-cd); otherwise the path is printed and copied). |
-| `1`–`5` | Jump to a screen from the home menu |
-| `A` | Switch between this repo and all repos |
-| `/` | Filter worktrees |
-| `H` `E` `D` | Hydrate, sync env, remove the selected worktree |
-| `U` | Update cmw, when a newer release is out |
-| `Esc` / `Q` | Back / quit |
-
-Everything is also clickable: menu items, rows (click to select, click again to open), the shortcuts in the footer and dialog buttons. The wheel scrolls lists. To select text in the terminal while cmw is open, hold Option (Terminal, iTerm2) or Shift while dragging.
-
-When a newer release exists, the home screen shows it next to the logo. Click it or press `U` to update; cmw restarts on the new version when it's done.
-
-Removing asks first. If cmw refuses because of uncommitted or unpushed work, you can type the branch name to force it.
+With no arguments in a terminal, cmw opens an [interactive screen](/docs/interactive/): browse worktrees with their state and size, open one, create, hydrate, sync env, remove, clean up merged worktrees, slim build caches, and set up shell integration and the agent skill. Arrow keys, `Enter`, `Esc` and `Q` get you around, and the mouse works too.
 
 Without a terminal on stdin and stdout, or with `--json` / `CMW_JSON=1`, bare `cmw` prints help and exits 2, so scripts and agents are unaffected.
 

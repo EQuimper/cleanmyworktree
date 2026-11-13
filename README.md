@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://cmw.equimper.com/docs/"><b>Documentation</b></a> ·
+  <a href="https://cmw.equimper.com/#try-title">Try it in your browser</a> ·
   <a href="#install">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="https://cmw.equimper.com/docs/agents/">Use with agents</a>
@@ -63,7 +64,56 @@ cmw clean-artifacts --yes     # strip DerivedData/.cxx/build/.next from idle wor
 cmw update                    # upgrade through Homebrew, the installer or cargo
 ```
 
+Every command takes `--json` and `--help`. The [command reference](https://cmw.equimper.com/docs/commands/) lists every flag.
+
 `cmw new` puts worktrees in `~/.cmw/worktrees/<repo>/<branch>`; set `$CMW_HOME` to change that. Every other command works on any git worktree, including the ones under `~/.t3/worktrees`. `ls --all`, `gc --all` and `clean-artifacts --all` scan `~/.cmw/worktrees`, `~/.t3/worktrees` and any folders listed in `$CMW_SCAN_ROOTS`.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `cmw` | Opens the [interactive screen](#interactive-screen) in a terminal. |
+| `cmw new <branch>` | Creates a worktree and hydrates it. Prints the path last, so `cd "$(cmw new x)"` works. |
+| `cmw hydrate [path]` | Clones deps, copies secrets and rebuilds envs from the main checkout. `--dry-run` shows the plan. |
+| `cmw ls` | Lists worktrees: branch, uncommitted changes, merged, idle days, hydrated. `--sizes`, `--all`. |
+| `cmw path <name>` / `cmw cd <name>` | Prints a worktree's path, or jumps into it. `<name>` is a branch, slug, folder or path. |
+| `cmw env sync [path]` | Copies secrets and local config from the main checkout again. Files that differ in the worktree are kept unless `--force`. |
+| `cmw rm <name>` | Removes a worktree, its caches, and its branch if merged. Refuses to lose work without `--force`. |
+| `cmw gc` | Lists merged, clean worktrees. `--yes` removes them, `--stale <days>` reports old unmerged ones. |
+| `cmw clean-artifacts` | Lists build caches in worktrees idle for 7+ days. `--yes` deletes them, `--idle <days>` changes the cutoff. |
+| `cmw agents` | Shows the cmw skill and hooks for Claude Code, Codex, Grok and T3 Code. `install` and `prompt --copy` set them up. |
+| `cmw shell-init <shell>` | Prints the shell function behind `cmw cd`, for zsh, bash or fish. |
+| `cmw update` | Upgrades cmw through whatever installed it. `--check` only reports. |
+
+Global flags: `--json` (or `CMW_JSON=1`), `-C <dir>` to run against another repo like `git -C`, `-h`/`--help`, `-V`/`--version`. Full flag lists are in the [command reference](https://cmw.equimper.com/docs/commands/).
+
+## Interactive screen
+
+Run `cmw` on its own to manage worktrees with the keyboard or the mouse:
+
+```
+ ██████ ███    ███ ██     ██    shop
+██      ████  ████ ██     ██    main
+██      ██ ████ ██ ██  █  ██    v0.1.5
+██      ██  ██  ██ ██ ███ ██
+ ██████ ██      ██  ███ ███
+
+➤ 1. Worktrees    Browse, open, hydrate, remove             4 linked
+  2. New          Create a hydrated worktree
+  3. Clean        Remove merged worktrees                   2 ready
+  4. Slim         Delete build caches from idle worktrees   3.3 GB
+  5. Setup        Shell integration, agent skill, hooks
+
+↑↓  |  Enter  |  A All repos  |  Q Quit
+```
+
+- **Worktrees:** every worktree with its state, idle time and size. `Enter` opens it (with shell integration, your shell `cd`s there), `H` hydrates, `E` syncs env, `D` removes, `/` filters.
+- **New:** type a branch and an optional base; cmw creates and hydrates it.
+- **Clean:** the merged worktrees `cmw gc` would remove, as a checklist.
+- **Slim:** build caches in idle worktrees, with a threshold you change with `←` `→`.
+- **Setup:** shell integration, the agent skill and Claude Code hooks, each one keypress away.
+
+`A` switches between this repo and all repos, `Esc` goes back, `Q` quits. Removing asks first, and work cmw can't account for has to be confirmed by typing the branch name. Outside a terminal, or with `--json`, bare `cmw` prints help and exits 2, so scripts and agents never land in it. Details: [Interactive screen](https://cmw.equimper.com/docs/interactive/).
 
 ## What hydrate does
 
@@ -149,6 +199,12 @@ Copy-on-write clones fool `du`: each clone is reported at full size even though 
 ## Documentation
 
 The full docs live at **[cmw.equimper.com](https://cmw.equimper.com/docs/)**.
+
+The landing page has a playground that runs a pretend cmw in the browser (`website/src/lib/sim.ts` and `tui.ts`). Its help text and fixed output come from the real binary. After changing `src/cli.rs`, regenerate them, or `cargo test` fails:
+
+```sh
+cargo build --release && python3 website/scripts/cli-snapshot.py
+```
 
 ## License
 

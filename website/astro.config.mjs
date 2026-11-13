@@ -28,6 +28,7 @@ export default defineConfig({
           label: 'Use cmw',
           items: [
             { label: 'Create worktrees', slug: 'docs/worktrees' },
+            { label: 'Interactive screen', slug: 'docs/interactive' },
             { label: 'How hydrate works', slug: 'docs/hydrate' },
             { label: 'Secrets and .env', slug: 'docs/secrets' },
             { label: 'Clean up', slug: 'docs/cleanup' },
