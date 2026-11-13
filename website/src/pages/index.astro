@@ -104,6 +104,7 @@ const contract = [
           <button type="button" data-copy={brewInstall}>Copy</button>
         </div>
         <button type="button" class="prompt-copy" data-copy={agentPrompt}>Copy agent prompt</button>
+        <a class="prompt-copy try-link" href="#try">Try it in your browser</a>
         <a class="docs-link" href="/docs/">Read the docs</a>
       </div>
 
@@ -111,7 +112,7 @@ const contract = [
     </header>
 
     <main>
-      <section class="stop try" aria-labelledby="try-title">
+      <section id="try" class="stop try" aria-labelledby="try-title">
         <h2 id="try-title" class="node" data-reveal>Try it in your browser</h2>
         <Playground />
       </section>

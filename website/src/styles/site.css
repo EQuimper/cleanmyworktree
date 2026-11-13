@@ -8,6 +8,12 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 body {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -305,6 +311,13 @@ h1 {
 
 .get .prompt-copy {
   align-self: stretch;
+}
+
+.try-link {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
 }
 
 .prompt-copy:hover {

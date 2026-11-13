@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://cmw.equimper.com/docs/"><b>Documentation</b></a> ·
-  <a href="https://cmw.equimper.com/#try-title">Try it in your browser</a> ·
+  <a href="https://cmw.equimper.com/#try">Try it in your browser</a> ·
   <a href="#install">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="https://cmw.equimper.com/docs/agents/">Use with agents</a>

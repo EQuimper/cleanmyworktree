@@ -9,7 +9,7 @@ Run `cmw` with no arguments in a terminal:
 cmw
 ```
 
-It opens a full-screen view of your worktrees. Everything it does is also a regular command, so you can switch between the two. You can try it on the [home page](/#try-title) without installing anything.
+It opens a full-screen view of your worktrees. Everything it does is also a regular command, so you can switch between the two. You can try it on the [home page](/#try) without installing anything.
 
 ```
  ██████ ███    ███ ██     ██    shop

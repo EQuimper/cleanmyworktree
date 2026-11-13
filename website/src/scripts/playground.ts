@@ -389,6 +389,17 @@ if (root) {
 
   window.addEventListener('resize', () => tui && draw());
 
+  // Arriving at #try (the hero button, or a shared link) puts the cursor in the terminal.
+  const arrive = () => {
+    if (location.hash === '#try' && !coarse.matches) input.focus({ preventScroll: true });
+  };
+  window.addEventListener('hashchange', arrive);
+  // Clicking it again when the URL already ends in #try fires no hashchange.
+  for (const a of document.querySelectorAll('a[href="#try"]')) a.addEventListener('click', () => setTimeout(arrive));
+  // On a shared link, wait until the browser has finished its own jump to the fragment.
+  if (document.readyState === 'complete') setTimeout(arrive);
+  else window.addEventListener('load', () => setTimeout(arrive), { once: true });
+
   // The page renders `cmw ls` at build time; replay it so the session has that history.
   sim.exec('cmw ls');
   history.push('cmw ls');

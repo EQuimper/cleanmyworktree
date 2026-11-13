@@ -5,7 +5,7 @@ description: Install cmw and create your first hydrated worktree.
 
 cmw makes git worktrees fast to create, cheap on disk, and safe to clean up. Dependencies like `node_modules`, `Pods` and `vendor` are copy-on-write clones of your main checkout, so a new worktree is ready in seconds and costs almost no extra disk. It's built for people and AI agents running many worktrees in parallel.
 
-To see it before installing, [try it in your browser](/#try-title).
+To see it before installing, [try it in your browser](/#try).
 
 ## Install
 
