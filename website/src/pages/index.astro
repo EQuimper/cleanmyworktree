@@ -113,12 +113,12 @@ const contract = [
 
     <main>
       <section id="try" class="stop try" aria-labelledby="try-title">
-        <h2 id="try-title" class="node" data-reveal>Try it in your browser</h2>
+        <h2 id="try-title" class="node">Try it in your browser</h2>
         <Playground />
       </section>
 
       <section class="stop gaps" aria-labelledby="gaps-title">
-        <h2 id="gaps-title" class="node" data-reveal>A new worktree starts empty</h2>
+        <h2 id="gaps-title" class="node">A new worktree starts empty</h2>
         <div class="compare" role="table" aria-label="What a new worktree is missing">
           <div class="compare-head" role="row">
             <span role="columnheader"><span class="sr-only">Missing</span></span>
@@ -138,7 +138,7 @@ const contract = [
       </section>
 
       <section class="stop cow" aria-labelledby="cow-title">
-        <h2 id="cow-title" class="node" data-reveal>Clones share disk until a file changes</h2>
+        <h2 id="cow-title" class="node">Clones share disk until a file changes</h2>
         <p class="body">
           A copy-on-write clone points at the same disk blocks as the original. Ten worktrees with a 1.4 GB <code>node_modules</code> use about 1.4 GB, not 14. Install a package in one of them and only that package takes new space.
         </p>
@@ -177,7 +177,7 @@ const contract = [
       </section>
 
       <section class="stop rules" aria-labelledby="rules-title">
-        <h2 id="rules-title" class="node" data-reveal>Every ignored file gets the right treatment</h2>
+        <h2 id="rules-title" class="node">Every ignored file gets the right treatment</h2>
         <p class="body">For each gitignored path in your main checkout, cmw asks one question: does it still work from another folder?</p>
 
         <div class="tree" role="table" aria-label="How cmw handles ignored files in an example repo">
@@ -200,7 +200,7 @@ const contract = [
       </section>
 
       <section class="stop safe" aria-labelledby="safe-title">
-        <h2 id="safe-title" class="node" data-reveal>Cleanup that keeps your work</h2>
+        <h2 id="safe-title" class="node">Cleanup that keeps your work</h2>
         <div class="split">
           <ul class="checks">
             <li>Refuses to delete uncommitted changes or unpushed commits unless you pass <code>--force</code>.</li>
@@ -222,7 +222,7 @@ const contract = [
       </section>
 
       <section class="stop agents" aria-labelledby="agents-title">
-        <h2 id="agents-title" class="node" data-reveal>Built for agents</h2>
+        <h2 id="agents-title" class="node">Built for agents</h2>
         <p class="body">Claude Code, Codex, Grok and T3 Code can create, use and remove worktrees with cmw without asking you anything.</p>
         <div class="split">
           <dl>

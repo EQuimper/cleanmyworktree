@@ -19,8 +19,19 @@ for (const term of document.querySelectorAll<HTMLElement>('.term[data-reveal]'))
 }
 
 const targets = document.querySelectorAll<HTMLElement>('[data-reveal]');
+const nodes = document.querySelectorAll<HTMLElement>('main .node');
 
 if ('IntersectionObserver' in window) {
+  // A node fills once the rail's head (60% down the screen) reaches it, and
+  // empties again when you scroll back above it.
+  const rail = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) entry.target.classList.toggle('in', entry.isIntersecting);
+    },
+    { rootMargin: '100% 0px -40% 0px' },
+  );
+  nodes.forEach((el) => rail.observe(el));
+
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -34,4 +45,5 @@ if ('IntersectionObserver' in window) {
   targets.forEach((el) => observer.observe(el));
 } else {
   targets.forEach((el) => el.classList.add('in'));
+  nodes.forEach((el) => el.classList.add('in'));
 }

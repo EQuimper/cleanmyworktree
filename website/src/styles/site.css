@@ -1380,7 +1380,7 @@ h1 {
     text-decoration-color 150ms ease;
 }
 
-/* A section's node fills as it scrolls into view, like a commit landing. */
+/* A section's node fills when the rail reaches it, like a commit landing. */
 main .node::before {
   transition: background-color 300ms var(--ease-out);
 }
@@ -1390,6 +1390,30 @@ main .node.in::before {
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* The rail draws itself as you scroll, its head held 60% down the screen.
+     The part it hasn't reached yet stays as a faint track. Each segment starts
+     when its top passes that point and ends when its bottom does. */
+  @supports (animation-timeline: view()) {
+    main > .stop::after,
+    .hero .node::after,
+    .end .node::after {
+      background: linear-gradient(var(--rail), var(--rail)) top / 100% 0% no-repeat
+        color-mix(in srgb, var(--rail) 18%, transparent);
+      /* Longhands: the minifier folds a timeline into the shorthand, which Chrome rejects. */
+      animation-name: rail-draw;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: cover 40vh cover calc(100% - 60vh);
+    }
+
+    /* Room for the last node to scroll up to the head on tall screens. */
+    .end {
+      min-height: calc(40vh + clamp(4rem, 8vw, 7rem) + 3rem);
+      align-content: start;
+    }
+  }
+
   /* The disk diagram: wires, then shared blocks, then the one new block. */
   .js .blocks .wires {
     clip-path: inset(0 100% 0 0);
@@ -1440,5 +1464,11 @@ main .node.in::before {
 
   .js .term[data-reveal].in .line {
     opacity: 1;
+  }
+}
+
+@keyframes rail-draw {
+  to {
+    background-size: 100% 100%;
   }
 }
