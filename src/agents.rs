@@ -646,10 +646,13 @@ pub fn prompt(copy: bool) -> Result<PromptReport> {
             copied: Some(true),
         })
     } else {
-        Err(
-            CmwError::error("couldn't copy to the clipboard (pbcopy failed)")
-                .with_hint("cmw agents prompt | pbcopy"),
-        )
+        Err(CmwError::error("couldn't copy to the clipboard").with_hint(
+            if cfg!(target_os = "macos") {
+                "cmw agents prompt | pbcopy"
+            } else {
+                "cmw agents prompt | wl-copy"
+            },
+        ))
     }
 }
 

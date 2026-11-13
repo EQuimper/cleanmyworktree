@@ -51,7 +51,7 @@ impl Method {
             Method::Homebrew => Some("brew upgrade equimper/tap/cmw".into()),
             // Download fully, then run: `curl | sh` would hide a failed download behind sh's status.
             Method::Installer => Some(format!(
-                "f=$(mktemp -t cmw-installer) && curl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\" && sh \"$f\""
+                "f=$(mktemp -t cmw-installer.XXXXXX) && curl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\" && sh \"$f\""
             )),
             Method::Cargo => Some("cargo install cmw --locked".into()),
             Method::Source { .. } | Method::Unknown => None,
@@ -62,7 +62,7 @@ impl Method {
     fn script(&self) -> Option<String> {
         match self {
             Method::Installer => Some(format!(
-                "set -e\nf=$(mktemp -t cmw-installer)\ntrap 'rm -f \"$f\"' EXIT\ncurl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\"\nsh \"$f\""
+                "set -e\nf=$(mktemp -t cmw-installer.XXXXXX)\ntrap 'rm -f \"$f\"' EXIT\ncurl --proto '=https' --tlsv1.2 -fLsS {INSTALLER} -o \"$f\"\nsh \"$f\""
             )),
             other => other.command(),
         }

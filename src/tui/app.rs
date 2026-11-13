@@ -1262,7 +1262,7 @@ impl App {
         if crate::clipboard::copy(text) {
             self.toast(done, Tone::Ok);
         } else {
-            self.toast("Could not reach the clipboard (pbcopy)", Tone::Error);
+            self.toast("Could not reach the clipboard", Tone::Error);
         }
     }
 
@@ -1473,9 +1473,10 @@ fn detect_shell() -> Option<ShellInfo> {
             })
         }
         "bash" => {
-            // macOS terminals start login shells, which read .bash_profile.
+            // macOS terminals start login shells, which read .bash_profile. Linux terminals
+            // start interactive non-login shells, which read .bashrc.
             let profile = home.join(".bash_profile");
-            let rc = if profile.exists() {
+            let rc = if cfg!(target_os = "macos") && profile.exists() {
                 profile
             } else {
                 home.join(".bashrc")

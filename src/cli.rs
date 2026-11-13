@@ -254,7 +254,7 @@ pub enum AgentsCommand {
     Install(AgentsInstallArgs),
     /// Print the setup prompt to paste into a coding agent.
     Prompt {
-        /// Copy it to the clipboard (pbcopy) instead of printing it.
+        /// Copy it to the clipboard instead of printing it.
         #[arg(long)]
         copy: bool,
     },
