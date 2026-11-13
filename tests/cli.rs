@@ -656,3 +656,44 @@ fn skill_install_without_dir_installs_for_agents() {
     assert_eq!(code, 0);
     assert_eq!(v["data"]["skills"].as_array().unwrap().len(), 2);
 }
+
+/// The landing page playground prints this help text and output. After changing src/cli.rs,
+/// run `cargo build --release && python3 website/scripts/cli-snapshot.py`.
+#[test]
+fn website_playground_matches_cli() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("website/src/lib/cli-snapshot.json");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let run = |args: Vec<&str>| {
+        let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("cmw"))
+            .args(args)
+            .env_remove("CMW_JSON")
+            .output()
+            .unwrap();
+        stdout(&out).trim_end().to_string()
+    };
+    for (cmd, entry) in saved["help"].as_object().unwrap() {
+        let args = |flag| cmd.split_whitespace().chain([flag]).collect::<Vec<_>>();
+        let long = entry["long"].as_str().unwrap();
+        let short = entry["short"].as_str().unwrap_or(long);
+        assert_eq!(
+            run(args("--help")),
+            long,
+            "`cmw {cmd} --help` changed; regenerate cli-snapshot.json"
+        );
+        assert_eq!(
+            run(args("-h")),
+            short,
+            "`cmw {cmd} -h` changed; regenerate cli-snapshot.json"
+        );
+    }
+    for (cmd, text) in saved["output"].as_object().unwrap() {
+        let args = cmd.split_whitespace().collect();
+        assert_eq!(
+            run(args),
+            text.as_str().unwrap(),
+            "`cmw {cmd}` changed; regenerate cli-snapshot.json"
+        );
+    }
+}

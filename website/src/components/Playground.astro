@@ -1,0 +1,75 @@
+---
+import { agentPrompt, version } from '../lib/release';
+import { type Line, Sim } from '../lib/sim';
+
+const sim = new Sim(version, agentPrompt);
+const start = sim.cwd;
+const first = 'cmw ls';
+const lines = sim.exec(first).flatMap((e) => ('out' in e ? [e.out] : [])) as Line[];
+const cls = (c?: string) => c?.split(' ').map((x) => `c-${x}`).join(' ');
+
+const suggestions = ['cmw new feat/login', 'cmw cd feat/login', 'cmw rm fix/checkout', 'cmw gc', 'cmw new fix/flaky --json', 'cmw'];
+const keys = [
+  ['ArrowUp', '↑'],
+  ['ArrowDown', '↓'],
+  ['ArrowLeft', '←'],
+  ['ArrowRight', '→'],
+  ['Enter', 'Enter'],
+  [' ', 'Space'],
+  ['Tab', 'Tab'],
+  ['Escape', 'Esc'],
+  ['q', 'Q'],
+];
+---
+
+<div class="play" data-play data-version={version} data-agent-prompt={agentPrompt}>
+  <div class="play-tty">
+    <div class="tty-bar">
+      <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="tty-title" data-title>{start}</span>
+      <button type="button" class="play-reset" data-reset>Reset</button>
+    </div>
+    <div class="play-body">
+      <div class="play-screen" data-screen>
+        <div class="play-log" data-log role="log" aria-label="Playground output">
+          <span class="line entered"><span class="c-prompt">{start} $ </span><span class="c-cmd">{first}</span></span>
+          {
+            lines.map((l) => (
+              <span class="line">{l.length ? l.map((s) => <span class={cls(s.c)}>{s.t}</span>) : '\u200b'}</span>
+            ))
+          }
+        </div>
+        <span class="line run-cursor" aria-hidden="true"><span class="cursor"></span></span>
+        <label class="line play-prompt" data-prompt-line>
+          <span class="c-prompt" data-prompt>{start} $ </span>
+          <span class="field">
+            <input
+              data-input
+              type="text"
+              placeholder=" "
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              enterkeyhint="go"
+              aria-label="Type a command"
+            />
+            <span class="cursor idle" aria-hidden="true"></span>
+          </span>
+        </label>
+      </div>
+      <div class="tui" data-tui hidden></div>
+      <span class="measure" data-measure aria-hidden="true">MMMMMMMMMM</span>
+    </div>
+    <div class="keypad" data-keypad hidden>
+      {keys.map(([key, label]) => <button type="button" data-key={key}>{label}</button>)}
+    </div>
+  </div>
+  <div class="chips" aria-label="Try a command">
+    {suggestions.map((s) => <button type="button" data-run={s}><code>{s}</code></button>)}
+  </div>
+</div>
+
+<script>
+  import '../scripts/playground';
+</script>

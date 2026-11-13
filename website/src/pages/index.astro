@@ -4,6 +4,7 @@ import '@fontsource-variable/martian-mono/index.css';
 import '../styles/shared.css';
 import '../styles/site.css';
 import Duel from '../components/Duel.astro';
+import Playground from '../components/Playground.astro';
 import og from '../assets/og.png';
 import { agentPrompt, brewInstall, repo, version } from '../lib/release';
 
@@ -110,6 +111,11 @@ const contract = [
     </header>
 
     <main>
+      <section class="stop try" aria-labelledby="try-title">
+        <h2 id="try-title" class="node" data-reveal>Try it in your browser</h2>
+        <Playground />
+      </section>
+
       <section class="stop gaps" aria-labelledby="gaps-title">
         <h2 id="gaps-title" class="node" data-reveal>A new worktree starts empty</h2>
         <div class="compare" role="table" aria-label="What a new worktree is missing">

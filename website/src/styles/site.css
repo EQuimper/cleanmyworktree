@@ -537,6 +537,334 @@ h1 {
 
 }
 
+/* Try it: a pretend shell, and the interactive screen inside it. */
+
+.play {
+  max-width: 76rem;
+  margin-top: clamp(2rem, 4vw, 3rem);
+}
+
+.play-tty {
+  overflow: hidden;
+  border-radius: 0.9rem;
+  background: var(--graphite);
+  color: #d9e0dc;
+  box-shadow: 0 24px 50px -24px rgb(0 0 0 / 45%);
+}
+
+.play-reset {
+  flex: none;
+  margin-left: auto;
+  padding: 0.15rem 0.65rem;
+  border: 0;
+  border-radius: 999px;
+  background: #262b28;
+  color: #aab3ae;
+  font-size: 0.72rem;
+  font-weight: 700;
+  transition:
+    color 150ms ease,
+    transform 120ms var(--ease-out);
+}
+
+.play-reset:active {
+  transform: scale(0.97);
+}
+
+.play-body {
+  --focus: var(--mint);
+  position: relative;
+  height: clamp(22rem, 64vh, 31rem);
+  font-family: var(--font-mono);
+  font-size: clamp(0.68rem, 0.95vw, 0.78rem);
+}
+
+.play-screen {
+  position: absolute;
+  inset: 0;
+  padding: 1rem 1.1rem 1.25rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  line-height: 1.7;
+  scrollbar-color: #3a3f3c transparent;
+}
+
+.play-screen .line {
+  display: block;
+  white-space: pre;
+}
+
+.play-log .entered:not(:first-child) {
+  margin-top: 0.35rem;
+}
+
+.play-screen .play-prompt {
+  display: flex;
+  margin-top: 0.35rem;
+}
+
+.field {
+  position: relative;
+  flex: 1;
+  min-width: 6ch;
+}
+
+.field input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--paper);
+  font: inherit;
+  font-weight: 700;
+  caret-color: var(--mint);
+}
+
+.field .idle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  display: none;
+  transform: translateY(-50%);
+}
+
+.play:not(.in-tui) .field:has(input:not(:focus):placeholder-shown) .idle {
+  display: inline-block;
+}
+
+.play-screen .run-cursor {
+  display: none;
+}
+
+.play.running .play-screen .run-cursor {
+  display: block;
+}
+
+.c-prompt {
+  color: var(--mint);
+  user-select: none;
+}
+
+.c-cmd {
+  color: var(--paper);
+  font-weight: 700;
+}
+
+.c-ok,
+.c-lit,
+.c-accent {
+  color: var(--mint);
+}
+
+.c-ok,
+.c-b {
+  font-weight: 700;
+}
+
+.c-b:not(.c-accent, .c-danger, .c-warn) {
+  color: var(--paper);
+}
+
+.c-err,
+.c-danger {
+  color: #ff8f7a;
+}
+
+.c-warn {
+  color: #f2c14e;
+}
+
+.c-info,
+.c-dir {
+  color: #7ab8ff;
+}
+
+.c-dim {
+  color: #9aa5a0;
+}
+
+.c-faint {
+  color: #5c6661;
+}
+
+/* The interactive screen draws over the shell, like a terminal's alternate screen. */
+.tui {
+  position: absolute;
+  inset: 0;
+  padding: 0.5rem 0.6rem;
+  overflow: hidden;
+  background: var(--graphite);
+  cursor: default;
+  line-height: 1.3;
+  user-select: none;
+}
+
+.measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.tl {
+  overflow: hidden;
+  white-space: pre;
+}
+
+.tl.sel {
+  background: #1b2b24;
+}
+
+.tui [data-hit] {
+  cursor: pointer;
+}
+
+.c-logo {
+  line-height: 1;
+}
+
+.c-g0 {
+  color: #4ef2a0;
+}
+
+.c-g1 {
+  color: #42e2a2;
+}
+
+.c-g2 {
+  color: #37d2a3;
+}
+
+.c-g3 {
+  color: #2bc5a5;
+}
+
+.c-g4 {
+  color: #1fb8a6;
+}
+
+.tui-small {
+  display: grid;
+  height: 100%;
+  place-items: center;
+}
+
+.tui-box {
+  --tone: var(--mint);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(76ch, calc(100% - 6ch));
+  max-height: calc(100% - 2lh);
+  padding: 1lh 2ch 0.6lh;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--tone);
+  border-radius: 0.5rem;
+  background: var(--graphite);
+}
+
+.tui-box.tone-danger {
+  --tone: #ff8f7a;
+}
+
+.tui-box.tone-warn {
+  --tone: #f2c14e;
+}
+
+.tui-box .tl {
+  white-space: pre-wrap;
+}
+
+.tui-box-title {
+  position: absolute;
+  top: -0.5lh;
+  left: 1ch;
+  background: var(--graphite);
+  white-space: pre;
+}
+
+.in-tui .play-prompt {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.keypad {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--graphite-line);
+}
+
+.keypad[hidden] {
+  display: none;
+}
+
+.keypad button {
+  min-width: 2.75rem;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: #262b28;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.keypad button:active {
+  background: #33403a;
+}
+
+@media (pointer: fine) {
+  .keypad {
+    display: none;
+  }
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.chips button {
+  padding: 0.35rem 0.85rem;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 120ms var(--ease-out);
+}
+
+.chips code {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.chips button:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .play-reset:hover {
+    color: var(--paper);
+  }
+
+  .chips button:hover {
+    background: var(--ink);
+    color: var(--mint);
+  }
+}
+
+
 /* A new worktree starts empty */
 
 .compare {
