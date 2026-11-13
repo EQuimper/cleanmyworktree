@@ -200,12 +200,6 @@ Copy-on-write clones fool `du`: each clone is reported at full size even though 
 
 The full docs live at **[cmw.equimper.com](https://cmw.equimper.com/docs/)**.
 
-The landing page has a playground that runs a pretend cmw in the browser (`website/src/lib/sim.ts` and `tui.ts`). Its help text and fixed output come from the real binary. After changing `src/cli.rs`, regenerate them, or `cargo test` fails:
-
-```sh
-cargo build --release && python3 website/scripts/cli-snapshot.py
-```
-
 ## License
 
 MIT
