@@ -9,6 +9,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::Rect;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -165,6 +166,13 @@ pub enum Modal {
     },
 }
 
+#[derive(Default)]
+struct Loaded {
+    rows: u64,
+    gc: u64,
+    slim: u64,
+}
+
 pub struct Busy {
     pub label: String,
     pub started: Instant,
@@ -186,6 +194,8 @@ pub struct App {
     pub screen: Screen,
     pub home_sel: usize,
     pub generation: u64,
+    /// Generation each list was last loaded at; behind `generation` while a refresh runs.
+    loaded: Loaded,
     pub rows: Load<Vec<Row>>,
     pub wt_sel: usize,
     pub filter: String,
@@ -204,12 +214,27 @@ pub struct App {
     pub setup: Vec<SetupRow>,
     pub setup_sel: usize,
     pub modal: Option<Modal>,
+    /// Dialogs from background work, waiting for the open dialog or task to finish.
+    queued: VecDeque<Modal>,
     pub busy: Option<Busy>,
+    /// Worktrees being removed in the background.
+    pub removing: HashSet<PathBuf>,
+    /// Removed since the current load started, so its results may still list them.
+    removed: HashSet<PathBuf>,
+    /// The next loaded list re-measures every size, not only new worktrees.
+    remeasure: bool,
+    /// Shown sizes that may be out of date until a new measurement lands, even if the load that
+    /// started measuring them is superseded.
+    pub(super) unmeasured: HashSet<PathBuf>,
+    /// Outcomes the user quit before seeing, printed once the TUI closes.
+    notes: Vec<String>,
     pub toast: Option<(String, Tone, Instant)>,
     pub tick: usize,
     /// Directory the caller's shell should end up in (Open, or away from a removed worktree).
     pub cd_on_exit: Option<PathBuf>,
+    /// Quit was asked for; the loop ends once removals finish (see `exiting`).
     pub quit: bool,
+    force_quit: bool,
     pub shell_wrapper: bool,
     /// A newer release, once the background check finds one.
     pub update: Option<String>,
@@ -258,6 +283,7 @@ impl App {
             screen: Screen::Home,
             home_sel: 0,
             generation: 0,
+            loaded: Loaded::default(),
             rows: Load::Loading,
             wt_sel: 0,
             filter: String::new(),
@@ -274,11 +300,18 @@ impl App {
             setup: Vec::new(),
             setup_sel: 0,
             modal: None,
+            queued: VecDeque::new(),
             busy: None,
+            removing: HashSet::new(),
+            removed: HashSet::new(),
+            remeasure: false,
+            unmeasured: HashSet::new(),
+            notes: Vec::new(),
             toast: None,
             tick: 0,
             cd_on_exit: None,
             quit: false,
+            force_quit: false,
             shell_wrapper: std::env::var_os("CMW_CD_FILE").is_some(),
             update: None,
             restart: None,
@@ -301,14 +334,23 @@ impl App {
             .collect()
     }
 
-    /// Reload everything shown (after startup, a scope switch, or a change on disk).
+    /// Load everything from scratch, showing the loading state (startup, scope switch).
     pub fn reload(&mut self) {
-        self.generation += 1;
-        self.size_cancel.store(true, Ordering::Relaxed);
-        self.size_cancel = Arc::new(AtomicBool::new(false));
         self.rows = Load::Loading;
         self.gc = Load::Loading;
         self.slim = Load::Loading;
+        self.refresh(true);
+    }
+
+    /// Re-read everything in the background, keeping what's on screen until the new data lands.
+    /// Without `remeasure`, only worktrees with no known size are measured.
+    pub fn refresh(&mut self, remeasure: bool) {
+        self.generation += 1;
+        self.remeasure |= remeasure;
+        // Anything removed so far is gone before this load starts.
+        self.removed.clear();
+        self.size_cancel.store(true, Ordering::Relaxed);
+        self.size_cancel = Arc::new(AtomicBool::new(false));
         jobs::load_ls(&self.tx, &self.cwd, self.all, self.generation);
         jobs::load_gc_preview(&self.tx, &self.cwd, self.all, self.generation);
         jobs::load_slim_preview(
@@ -335,6 +377,56 @@ impl App {
         self.toast = Some((msg.into(), tone, Instant::now()));
     }
 
+    /// A background refresh is re-reading what `screen` shows, its old data still up.
+    pub fn refreshing(&self, screen: Screen) -> bool {
+        let (shown, loaded) = match screen {
+            Screen::Worktrees => (self.rows.ready().is_some(), self.loaded.rows),
+            Screen::Clean => (self.gc.ready().is_some(), self.loaded.gc),
+            Screen::Slim => (self.slim.ready().is_some(), self.loaded.slim),
+            _ => return false,
+        };
+        shown && loaded != self.generation
+    }
+
+    /// The event loop ends: quit was asked for and no removal is left half done, unless forced.
+    pub fn exiting(&self) -> bool {
+        self.quit && (self.removing.is_empty() || self.force_quit)
+    }
+
+    /// What happened after the user quit, for printing once the terminal is restored.
+    pub fn exit_notes(&self) -> Vec<String> {
+        let mut notes = self.notes.clone();
+        if self.force_quit {
+            let mut cut: Vec<_> = self.removing.iter().collect();
+            cut.sort();
+            notes.extend(
+                cut.into_iter()
+                    .map(|p| format!("Quit while removing {}; check it with `cmw ls`", tilde(p))),
+            );
+        }
+        notes
+    }
+
+    /// Open `m` now, or after the dialog or task on screen. After quit, keep it for the exit.
+    fn show_modal(&mut self, m: Modal) {
+        if self.quit {
+            self.notes.extend(note(&m));
+        } else if self.modal.is_none() && self.busy.is_none() {
+            self.modal = Some(m);
+        } else {
+            self.queued.push_back(m);
+        }
+    }
+
+    fn show_queued(&mut self) {
+        if self.quit {
+            let queued: Vec<Modal> = self.queued.drain(..).collect();
+            self.notes.extend(queued.iter().filter_map(note));
+        } else if self.modal.is_none() && self.busy.is_none() {
+            self.modal = self.queued.pop_front();
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // Messages from background jobs
     // -----------------------------------------------------------------------------------------
@@ -345,27 +437,23 @@ impl App {
     }
 
     pub fn on_msg(&mut self, msg: Msg) {
+        self.handle_msg(msg);
+        self.show_queued();
+    }
+
+    fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::UpdateAvailable(v) => self.update = v,
-            Msg::Ls { generation, res } if generation == self.generation => match res {
-                Ok(report) => {
-                    let rows = self.build_rows(report);
-                    let paths = rows
-                        .iter()
-                        .filter(|r| r.usable())
-                        .map(|r| r.st.path.clone())
-                        .collect();
-                    jobs::load_sizes(&self.tx, paths, generation, self.size_cancel.clone());
-                    self.rows = Load::Ready(rows);
-                    self.clamp_wt_sel();
-                }
-                Err(e) => self.rows = Load::Failed(e.message),
-            },
+            Msg::Ls { generation, res } if generation == self.generation => {
+                self.loaded.rows = generation;
+                self.on_ls(generation, res);
+            }
             Msg::Size {
                 generation,
                 path,
                 bytes,
             } if generation == self.generation => {
+                self.unmeasured.remove(&path);
                 if let Load::Ready(rows) = &mut self.rows
                     && let Some(r) = rows.iter_mut().find(|r| r.st.path == path)
                 {
@@ -373,9 +461,26 @@ impl App {
                 }
             }
             Msg::GcPreview { generation, res } if generation == self.generation => {
+                self.loaded.gc = generation;
+                // Boxes the user unticked stay unticked across refreshes.
+                let unticked: HashSet<PathBuf> = match &self.gc {
+                    Load::Ready(old) => old
+                        .would_remove
+                        .iter()
+                        .zip(&self.gc_checked)
+                        .filter(|(_, c)| !**c)
+                        .map(|(i, _)| i.path.clone())
+                        .collect(),
+                    _ => HashSet::new(),
+                };
                 self.gc = match res {
-                    Ok(r) => {
-                        self.gc_checked = vec![true; r.would_remove.len()];
+                    Ok(mut r) => {
+                        r.would_remove.retain(|i| !self.removed.contains(&i.path));
+                        self.gc_checked = r
+                            .would_remove
+                            .iter()
+                            .map(|i| !unticked.contains(&i.path))
+                            .collect();
                         self.gc_sel = self.gc_sel.min(r.would_remove.len().saturating_sub(1));
                         Load::Ready(r)
                     }
@@ -387,6 +492,7 @@ impl App {
                 idle,
                 res,
             } if generation == self.generation && idle == self.slim_idle => {
+                self.loaded.slim = generation;
                 self.slim = match res {
                     Ok(r) => {
                         self.slim_sel = self.slim_sel.min(r.worktrees.len().saturating_sub(1));
@@ -404,12 +510,57 @@ impl App {
                 }
             }
             Msg::Done(done) => {
-                self.busy = None;
-                self.ctrl_c_armed = false;
+                // Removals run beside the task on screen; anything else is that task.
+                if !matches!(done, Done::Remove { .. }) {
+                    self.busy = None;
+                    self.ctrl_c_armed = false;
+                }
                 self.on_done(done);
             }
             // Results of a superseded load.
             _ => {}
+        }
+    }
+
+    fn on_ls(&mut self, generation: u64, res: crate::output::Result<crate::inventory::LsReport>) {
+        match res {
+            Ok(report) => {
+                let selected = self.selected_path();
+                let mut rows = self.build_rows(report);
+                rows.retain(|r| !self.removed.contains(&r.st.path));
+                // Known sizes stay on screen while they are re-measured.
+                if let Load::Ready(old) = &self.rows {
+                    let known: HashMap<&Path, u64> = old
+                        .iter()
+                        .filter_map(|r| Some((r.st.path.as_path(), r.size?)))
+                        .collect();
+                    for r in &mut rows {
+                        r.size = known.get(r.st.path.as_path()).copied();
+                    }
+                }
+                if std::mem::take(&mut self.remeasure) {
+                    self.unmeasured.extend(
+                        rows.iter()
+                            .filter(|r| r.usable())
+                            .map(|r| r.st.path.clone()),
+                    );
+                }
+                let paths = rows
+                    .iter()
+                    .filter(|r| {
+                        r.usable() && (r.size.is_none() || self.unmeasured.contains(&r.st.path))
+                    })
+                    .map(|r| r.st.path.clone())
+                    .collect();
+                jobs::load_sizes(&self.tx, paths, generation, self.size_cancel.clone());
+                self.rows = Load::Ready(rows);
+                self.select_path(selected);
+            }
+            // A failed refresh keeps the list it was refreshing.
+            Err(e) if self.rows.ready().is_some() => {
+                self.toast(format!("Could not refresh: {}", e.message), Tone::Error)
+            }
+            Err(e) => self.rows = Load::Failed(e.message),
         }
     }
 
@@ -457,7 +608,7 @@ impl App {
                     } else {
                         format!("{} already has a worktree", r.branch)
                     };
-                    self.modal = Some(Modal::Result {
+                    self.show_modal(Modal::Result {
                         title,
                         text: jobs::with_warnings(text, &warnings),
                         tone: Tone::Ok,
@@ -468,7 +619,7 @@ impl App {
                     self.new_base.clear();
                     self.new_focus = 0;
                     self.screen = Screen::Worktrees;
-                    self.reload();
+                    self.refresh(false);
                 }
                 Err(e) => self.show_error("Could not create the worktree", &e),
             },
@@ -477,50 +628,7 @@ impl App {
                 force,
                 res,
                 warnings,
-            } => {
-                match res {
-                    Ok(r) => {
-                        if self.cwd.starts_with(&target.path) {
-                            // We (and the caller's shell) were inside it: move to the main
-                            // checkout so reloads, New and Clean keep working.
-                            self.relocate(target.repo_main.clone());
-                        }
-                        let mut msg = format!("Removed {}", target.label());
-                        if r.branch_deleted {
-                            msg.push_str(" and its branch");
-                        }
-                        if warnings.is_empty() {
-                            self.toast(msg, Tone::Ok);
-                        } else {
-                            self.modal = Some(Modal::Result {
-                                title: msg,
-                                text: jobs::with_warnings(String::new(), &warnings),
-                                tone: Tone::Warn,
-                                open: None,
-                                scroll: 0,
-                            });
-                        }
-                    }
-                    Err(e) if e.kind == ErrorKind::Refused && !force && !is_unforceable(&e) => {
-                        let expect = target.label();
-                        self.modal = Some(Modal::TypeToConfirm {
-                            title: format!("Remove {expect} anyway?"),
-                            lines: vec![
-                                e.message.clone(),
-                                "Forcing it permanently deletes that work.".into(),
-                            ],
-                            expect,
-                            input: String::new(),
-                            action: Action::Remove {
-                                target,
-                                force: true,
-                            },
-                        });
-                    }
-                    Err(e) => self.show_error(&format!("Could not remove {}", target.label()), &e),
-                }
-                self.reload();
-            }
+            } => self.on_removed(target, force, res, warnings),
             Done::Update { res, warnings } => match res {
                 Ok(r) if r.updated => {
                     self.restart = r.installed_path.clone();
@@ -544,7 +652,7 @@ impl App {
                         } else {
                             Tone::Ok
                         };
-                        self.modal = Some(Modal::Result {
+                        self.show_modal(Modal::Result {
                             title,
                             text,
                             tone,
@@ -554,13 +662,91 @@ impl App {
                     }
                     Err(e) => self.show_error("Failed", &e),
                 }
-                self.reload();
+                // Hydrate and Slim change sizes; Env and Clean don't, but a full pass is cheap
+                // next to what they just did.
+                self.refresh(true);
             }
         }
     }
 
+    /// A background removal finished. Others may still be running.
+    fn on_removed(
+        &mut self,
+        target: Target,
+        force: bool,
+        res: crate::output::Result<crate::gc::RmReport>,
+        warnings: Vec<String>,
+    ) {
+        self.removing.remove(&target.path);
+        match res {
+            Ok(r) => {
+                self.removed.insert(target.path.clone());
+                self.drop_removed(&target.path);
+                if self.cwd.starts_with(&target.path) {
+                    // We (and the caller's shell) were inside it: move to the main
+                    // checkout so reloads, New and Clean keep working.
+                    self.relocate(&target.path, target.repo_main.clone());
+                }
+                let mut msg = format!("Removed {}", target.label());
+                if r.branch_deleted {
+                    msg.push_str(" and its branch");
+                }
+                if warnings.is_empty() {
+                    self.toast(msg, Tone::Ok);
+                } else {
+                    self.show_modal(Modal::Result {
+                        title: msg,
+                        text: jobs::with_warnings(String::new(), &warnings),
+                        tone: Tone::Warn,
+                        open: None,
+                        scroll: 0,
+                    });
+                }
+            }
+            Err(e) if e.kind == ErrorKind::Refused && !force && !is_unforceable(&e) => {
+                let expect = target.label();
+                self.show_modal(Modal::TypeToConfirm {
+                    title: format!("Remove {expect} anyway?"),
+                    lines: vec![
+                        e.message.clone(),
+                        "Forcing it permanently deletes that work.".into(),
+                    ],
+                    expect,
+                    input: String::new(),
+                    action: Action::Remove {
+                        target,
+                        force: true,
+                    },
+                });
+            }
+            Err(e) => self.show_error(&format!("Could not remove {}", target.label()), &e),
+        }
+        // One refresh once the batch is done, not one per removal.
+        if self.removing.is_empty() {
+            self.refresh(false);
+        }
+    }
+
+    /// Take a removed worktree off the lists now instead of waiting for the next refresh.
+    fn drop_removed(&mut self, path: &Path) {
+        let selected = self.selected_path();
+        if let Load::Ready(rows) = &mut self.rows {
+            rows.retain(|r| r.st.path != path);
+        }
+        if let Load::Ready(gc) = &mut self.gc
+            && let Some(i) = gc.would_remove.iter().position(|w| w.path == path)
+        {
+            gc.would_remove.remove(i);
+            if i < self.gc_checked.len() {
+                self.gc_checked.remove(i);
+            }
+            self.gc_sel = self.gc_sel.min(gc.would_remove.len().saturating_sub(1));
+        }
+        self.select_path(selected);
+    }
+
     /// Continue from `dir` after the worktree we started in was removed.
-    fn relocate(&mut self, dir: Option<PathBuf>) {
+    fn relocate(&mut self, removed: &Path, dir: Option<PathBuf>) {
         let Some(dir) = dir.filter(|d| d.is_dir()) else {
             self.toast(
                 "The worktree cmw started in was removed; restart cmw from another directory",
@@ -572,7 +758,14 @@ impl App {
             .ok()
             .filter(|b| !b.is_empty());
         self.cwd = dir.clone();
-        self.cd_on_exit = Some(dir);
+        // A worktree the user chose to open wins, unless it was inside the removed one.
+        if self
+            .cd_on_exit
+            .as_ref()
+            .is_none_or(|d| d.starts_with(removed))
+        {
+            self.cd_on_exit = Some(dir);
+        }
     }
 
     fn show_error(&mut self, title: &str, e: &CmwError) {
@@ -580,7 +773,7 @@ impl App {
         if let Some(h) = &e.hint {
             text.push_str(&format!("\n\nfix: {h}"));
         }
-        self.modal = Some(Modal::Result {
+        self.show_modal(Modal::Result {
             title: title.to_string(),
             text,
             tone: Tone::Error,
@@ -594,23 +787,33 @@ impl App {
     // -----------------------------------------------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        self.handle_key(key);
+        self.show_queued();
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
-            if self.busy.is_none() || self.ctrl_c_armed {
+            if self.quit || self.ctrl_c_armed {
+                // Leave now, even with removals half done.
                 self.quit = true;
-            } else {
+                self.force_quit = true;
+            } else if self.busy.is_some() {
                 self.ctrl_c_armed = true;
                 self.toast(
                     "A task is running. Press Ctrl-C again to quit anyway.",
                     Tone::Warn,
                 );
+            } else {
+                self.quit = true;
             }
             return;
         }
-        if self.busy.is_some() {
+        // Quitting, waiting for removals to finish.
+        if self.busy.is_some() || self.quit {
             return;
         }
         if self.modal.is_some() {
@@ -655,7 +858,7 @@ impl App {
                 return;
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                self.reload();
+                self.refresh(true);
                 return;
             }
             KeyCode::Char('u') | KeyCode::Char('U') if self.update.is_some() => {
@@ -709,7 +912,7 @@ impl App {
     // -----------------------------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
-        if self.busy.is_some() {
+        if self.busy.is_some() || self.quit {
             return;
         }
         let press =
@@ -860,6 +1063,20 @@ impl App {
         self.rows.ready()?.get(i)
     }
 
+    fn selected_path(&self) -> Option<PathBuf> {
+        self.selected_row().map(|r| r.st.path.clone())
+    }
+
+    /// Keep the cursor on `path` as rows come and go; if it's gone, on what took its place.
+    fn select_path(&mut self, path: Option<PathBuf>) {
+        if let (Some(path), Some(rows)) = (path, self.rows.ready())
+            && let Some(pos) = self.visible().iter().position(|&i| rows[i].st.path == path)
+        {
+            self.wt_sel = pos;
+        }
+        self.clamp_wt_sel();
+    }
+
     fn clamp_wt_sel(&mut self) {
         let n = self.visible().len();
         self.wt_sel = self.wt_sel.min(n.saturating_sub(1));
@@ -921,6 +1138,11 @@ impl App {
             self.toast("That worktree's directory is missing", Tone::Error);
             return;
         }
+        if self.removing.contains(&row.st.path) {
+            let msg = format!("{} is being removed", row.target().label());
+            self.toast(msg, Tone::Warn);
+            return;
+        }
         self.cd_on_exit = Some(row.st.path.clone());
         self.quit = true;
     }
@@ -935,6 +1157,10 @@ impl App {
         }
         let target = row.target();
         let label = target.label();
+        if self.removing.contains(&target.path) {
+            self.toast(format!("{label} is being removed"), Tone::Warn);
+            return;
+        }
         match op {
             Op::Hydrate if row.st.is_main => self.toast(
                 "The main checkout is the source; nothing to hydrate",
@@ -995,7 +1221,7 @@ impl App {
                     .would_remove
                     .iter()
                     .zip(&self.gc_checked)
-                    .filter(|(_, c)| **c)
+                    .filter(|(i, c)| **c && !self.removing.contains(&i.path))
                     .map(|(i, _)| Target {
                         path: i.path.clone(),
                         branch: i.branch.clone(),
@@ -1347,8 +1573,9 @@ impl App {
     fn run_action(&mut self, action: Action) {
         match action {
             Action::Remove { target, force } => {
-                self.start_busy(format!("Removing {}", target.label()));
-                jobs::remove(&self.tx, target, force);
+                if self.removing.insert(target.path.clone()) {
+                    jobs::remove(&self.tx, target, force);
+                }
             }
             Action::Clean { picked } => {
                 self.start_busy("Removing merged worktrees".into());
@@ -1398,6 +1625,28 @@ impl App {
             started: Instant::now(),
             lines: Vec::new(),
         });
+    }
+}
+
+/// A dialog as plain text, for the terminal after the TUI closes.
+fn note(m: &Modal) -> Option<String> {
+    match m {
+        Modal::Result { title, text, .. } if text.trim().is_empty() => Some(title.clone()),
+        Modal::Result { title, text, .. } => {
+            let body: Vec<String> = text.lines().map(|l| format!("  {l}")).collect();
+            Some(format!("{title}\n{}", body.join("\n")))
+        }
+        Modal::TypeToConfirm {
+            lines,
+            action: Action::Remove { target, .. },
+            ..
+        } => Some(format!(
+            "Kept {}: {}\n  fix: cmw rm {} --force",
+            target.label(),
+            lines.first().map_or("", String::as_str),
+            crate::output::sh_quote(&target.path.display().to_string())
+        )),
+        _ => None,
     }
 }
 

@@ -376,6 +376,9 @@ fn page(f: &mut Frame, area: Rect, app: &App, t: &Theme, screen: Screen) {
     if screen != Screen::Setup {
         spans.push(Span::styled(format!("   {scope}"), t.fg(t.dim)));
     }
+    if app.refreshing(screen) {
+        spans.push(Span::styled(format!("  {}", spinner(app)), t.fg(t.faint)));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), head);
     if screen == Screen::Worktrees && (app.filtering || !app.filter.is_empty()) {
         let cursor = if app.filtering { "▏" } else { "" };
@@ -584,10 +587,13 @@ fn worktrees(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     for (pos, &i) in vis.iter().enumerate().skip(offset).take(height) {
         let r = &rows[i];
         let sel = pos == app.wt_sel;
+        // On its way out: the row recedes and only its spinner keeps color.
+        let removing = app.removing.contains(&r.st.path);
+        let text = |s: Style| if removing { t.fg(t.faint) } else { s };
         row_hit(app, table, 1 + pos - offset, Hit::Row(pos));
         let mut spans = vec![Span::styled(if sel { "➤ " } else { "  " }, t.fg(t.accent))];
         if app.all {
-            spans.push(Span::styled(pad(&r.repo, repo_w + 2), t.fg(t.dim)));
+            spans.push(Span::styled(pad(&r.repo, repo_w + 2), text(t.fg(t.dim))));
         }
         let suffix = suffix(r);
         let label = truncate(
@@ -597,19 +603,24 @@ fn worktrees(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         let used = label.chars().count() + suffix.chars().count();
         spans.push(Span::styled(
             label,
-            if sel { t.accent_bold() } else { Style::new() },
+            text(if sel { t.accent_bold() } else { Style::new() }),
         ));
         spans.push(Span::styled(suffix, t.fg(t.faint)));
         spans.push(Span::raw(" ".repeat((branch_w + 2).saturating_sub(used))));
-        let (state, style) = state_cell(r, t);
-        spans.push(Span::styled(pad(&state, state_w + 2), style));
-        spans.push(Span::styled(rpad(&idle_cell(r), idle_w), t.fg(t.dim)));
+        if removing {
+            spans.push(Span::styled(format!("{} ", spinner(app)), t.fg(t.accent)));
+            spans.push(Span::styled(pad("removing", state_w), t.fg(t.dim)));
+        } else {
+            let (state, style) = state_cell(r, t);
+            spans.push(Span::styled(pad(&state, state_w + 2), style));
+        }
+        spans.push(Span::styled(rpad(&idle_cell(r), idle_w), text(t.fg(t.dim))));
         let size = match r.size {
             Some(b) => human_bytes(b),
             None if r.usable() => spinner(app).to_string(),
             None => "-".into(),
         };
-        spans.push(Span::styled(rpad(&size, size_w + 2), t.fg(t.dim)));
+        spans.push(Span::styled(rpad(&size, size_w + 2), text(t.fg(t.dim))));
         let mut line = Line::from(spans);
         if sel {
             line = highlight(line, table.width, t);
@@ -752,16 +763,16 @@ fn clean(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 Some(b) => human_bytes(b),
                 None => spinner(app).to_string(),
             };
+            let mark = if app.removing.contains(&item.path) {
+                Span::styled(format!("{} ", spinner(app)), t.fg(t.accent))
+            } else if checked {
+                Span::styled("◉ ", t.fg(t.accent))
+            } else {
+                Span::styled("○ ", t.fg(t.faint))
+            };
             let mut spans = vec![
                 Span::styled(if sel { "➤ " } else { "  " }, t.fg(t.accent)),
-                Span::styled(
-                    if checked { "◉ " } else { "○ " },
-                    if checked {
-                        t.fg(t.accent)
-                    } else {
-                        t.fg(t.faint)
-                    },
-                ),
+                mark,
             ];
             if app.all {
                 spans.push(Span::styled(pad(&item.repo, repo_w), t.fg(t.dim)));
@@ -791,7 +802,7 @@ fn clean(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
             .would_remove
             .iter()
             .zip(&app.gc_checked)
-            .filter(|(_, c)| **c)
+            .filter(|(i, c)| **c && !app.removing.contains(&i.path))
             .collect();
         let known: u64 = picked
             .iter()
@@ -953,6 +964,26 @@ fn setup(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 // ---------------------------------------------------------------------------------------------
 
 fn render_toast(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
+    let area = Rect {
+        x: area.x + PAD,
+        width: area.width.saturating_sub(PAD),
+        ..area
+    };
+    if app.quit && !app.removing.is_empty() {
+        let n = app.removing.len();
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{} ", spinner(app)), t.fg(t.accent)),
+                Span::styled(
+                    format!("Finishing {n} removal{}", if n == 1 { "" } else { "s" }),
+                    t.fg(t.dim),
+                ),
+                Span::styled("   Ctrl-C quits now", t.fg(t.faint)),
+            ])),
+            area,
+        );
+        return;
+    }
     let Some((msg, tone, _)) = &app.toast else {
         return;
     };
@@ -960,11 +991,6 @@ fn render_toast(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Tone::Ok => ("✓", t.fg(t.accent)),
         Tone::Warn => ("!", t.fg(t.warn)),
         Tone::Error => ("✗", t.fg(t.danger)),
-    };
-    let area = Rect {
-        x: area.x + PAD,
-        width: area.width.saturating_sub(PAD),
-        ..area
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![

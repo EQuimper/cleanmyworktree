@@ -505,6 +505,16 @@ fn table(rows: &[Vec<String>]) -> String {
         .join("\n")
 }
 
+#[cfg(test)]
+impl LsReport {
+    pub fn from_repos(repos: Vec<RepoStatus>) -> Self {
+        Self {
+            repos,
+            sizes: false,
+        }
+    }
+}
+
 impl Report for LsReport {
     fn human(&self) -> String {
         if self.repos.is_empty() {

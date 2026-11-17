@@ -48,7 +48,7 @@ pub fn run(cwd: PathBuf) -> i32 {
         restore_hook(info);
     }));
     let result = (|| -> std::io::Result<()> {
-        while !app.quit {
+        while !app.exiting() {
             terminal.draw(|f| ui::render(f, &app, &theme))?;
             if event::poll(Duration::from_millis(80))? {
                 match event::read()? {
@@ -67,6 +67,9 @@ pub fn run(cwd: PathBuf) -> i32 {
     })();
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
+    for note in app.exit_notes() {
+        eprintln!("{note}");
+    }
     if let Err(e) = result {
         eprintln!("error: {e}");
         return 1;

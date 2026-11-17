@@ -301,7 +301,188 @@ fn refused_remove_needs_the_exact_branch_name_to_force() {
     typed(&mut app, "t");
     key(&mut app, KeyCode::Enter);
     assert!(app.modal.is_none());
-    assert_eq!(app.busy.as_ref().unwrap().label, "Removing feat/cart");
+    assert!(app.busy.is_none());
+    assert!(app.removing.contains(&PathBuf::from("/nowhere/wt")));
+}
+
+// Removal targets in these tests are real directories outside any repository, so the background
+// job they start fails on the repo lock and deletes nothing.
+
+fn removal(path: &str, res: crate::output::Result<crate::gc::RmReport>) -> super::jobs::Msg {
+    super::jobs::Msg::Done(super::jobs::Done::Remove {
+        target: target(path, Some("/")),
+        force: false,
+        res,
+        warnings: vec![],
+    })
+}
+
+fn removing(app: &mut App, paths: &[&str]) {
+    app.removing.extend(paths.iter().map(PathBuf::from));
+}
+
+#[test]
+fn removal_runs_in_the_background_and_others_can_start() {
+    let mut app = app();
+    let mut old = status("/usr", "feat/old", false);
+    old.merged = Some(true);
+    if let Load::Ready(rows) = &mut app.rows {
+        rows.push(row(old));
+    }
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('d'));
+    key(&mut app, KeyCode::Enter);
+    assert!(app.modal.is_none());
+    assert!(app.busy.is_none(), "no overlay while removing");
+    assert!(app.removing.contains(&PathBuf::from("/tmp")));
+    let text = screen_text(&app);
+    assert!(
+        text.contains("feat/done") && text.contains("removing"),
+        "{text}"
+    );
+    key(&mut app, KeyCode::End);
+    key(&mut app, KeyCode::Char('d'));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.removing.len(), 2);
+}
+
+#[test]
+fn a_row_being_removed_cannot_be_acted_on() {
+    let mut app = app();
+    removing(&mut app, &["/tmp"]);
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('d'));
+    assert!(app.modal.is_none());
+    assert!(app.toast.as_ref().unwrap().0.contains("being removed"));
+    key(&mut app, KeyCode::Enter);
+    assert!(!app.quit);
+}
+
+#[test]
+fn a_finished_removal_drops_its_row_and_keeps_the_page_and_cursor() {
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::End);
+    removing(&mut app, &["/tmp"]);
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    assert!(app.removing.is_empty());
+    assert_eq!(app.rows.ready().map(Vec::len), Some(2));
+    assert_eq!(app.selected_row().unwrap().branch_label(), "feat/cart");
+    let text = screen_text(&app);
+    assert!(!text.contains("Reading worktrees"), "{text}");
+    assert!(
+        text.contains("3.0 MB"),
+        "sizes stay while refreshing:\n{text}"
+    );
+    assert!(app.refreshing(Screen::Worktrees));
+    assert!(app.toast.as_ref().unwrap().0.starts_with("Removed"));
+}
+
+#[test]
+fn removing_the_selected_row_moves_the_cursor_to_the_next_one() {
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    removing(&mut app, &["/tmp"]);
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    assert_eq!(app.selected_row().unwrap().branch_label(), "feat/cart");
+}
+
+#[test]
+fn a_load_that_started_before_a_removal_does_not_bring_it_back() {
+    use crate::inventory::{LsReport, RepoStatus};
+    let mut app = app();
+    removing(&mut app, &["/tmp", "/usr"]);
+    // `/usr` is still going, so no new load replaces the one in flight.
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let report = LsReport::from_repos(vec![RepoStatus {
+        repo: "shop".into(),
+        common_dir: PathBuf::from("/.git"),
+        default_branch: "main".into(),
+        worktrees: vec![
+            status("/", "main", true),
+            status("/tmp", "feat/done", false),
+            status(manifest, "feat/cart", false),
+        ],
+    }]);
+    app.on_msg(super::jobs::Msg::Ls {
+        generation: app.generation,
+        res: Ok(report),
+    });
+    assert!(!app.refreshing(Screen::Worktrees));
+    let rows = app.rows.ready().unwrap();
+    let paths: Vec<_> = rows.iter().map(|r| r.st.path.clone()).collect();
+    assert_eq!(paths, [PathBuf::from("/"), PathBuf::from(manifest)]);
+    assert!(rows.iter().all(|r| r.size == Some(3 * 1024 * 1024)));
+}
+
+#[test]
+fn a_refusal_waits_for_the_dialog_on_screen() {
+    let mut app = app();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('d'));
+    removing(&mut app, &["/nowhere/wt"]);
+    app.on_msg(removal(
+        "/nowhere/wt",
+        Err(crate::output::CmwError::refused(
+            "3 uncommitted changes in /nowhere/wt",
+            "cmw rm feat/cart --force",
+        )),
+    ));
+    assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.modal, Some(Modal::TypeToConfirm { .. })));
+}
+
+#[test]
+fn a_removal_finishing_leaves_the_running_task_alone() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    app.busy = Some(super::app::Busy {
+        label: "Hydrating".into(),
+        started: std::time::Instant::now(),
+        lines: vec![],
+    });
+    removing(&mut app, &["/tmp", "/usr"]);
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    assert!(app.busy.is_some());
+    app.on_msg(removal(
+        "/usr",
+        Err(crate::output::CmwError::error("disk on fire")),
+    ));
+    assert!(app.modal.is_none(), "errors wait for the task");
+    app.on_msg(Msg::Done(Done::Text {
+        title: "Hydrated feat/cart".into(),
+        res: Ok("done".into()),
+    }));
+    assert!(app.busy.is_none());
+    assert!(screen_text(&app).contains("Hydrated feat/cart"));
+    key(&mut app, KeyCode::Esc);
+    assert!(screen_text(&app).contains("disk on fire"));
+}
+
+#[test]
+fn quit_waits_for_removals_to_finish() {
+    let mut app = app();
+    removing(&mut app, &["/tmp"]);
+    key(&mut app, KeyCode::Char('q'));
+    assert!(app.quit && !app.exiting());
+    assert!(screen_text(&app).contains("Finishing 1 removal"));
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    assert!(app.exiting());
+}
+
+#[test]
+fn ctrl_c_quits_without_waiting_for_removals() {
+    let mut app = app();
+    removing(&mut app, &["/tmp"]);
+    key(&mut app, KeyCode::Char('q'));
+    app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app.exiting());
 }
 
 /// Render, then return the cell where `needle` starts.
@@ -504,4 +685,138 @@ fn setup_lists_agent_rows() {
             "AGENTS.md snippet"
         ]
     );
+}
+
+#[test]
+fn opening_a_worktree_survives_removing_the_launch_one() {
+    let mut app = app();
+    let main = env!("CARGO_MANIFEST_DIR");
+    app.cwd = PathBuf::from("/gone/wt/src");
+    removing(&mut app, &["/gone/wt"]);
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.cd_on_exit, Some(PathBuf::from("/tmp")));
+    app.on_msg(super::jobs::Msg::Done(super::jobs::Done::Remove {
+        target: target("/gone/wt", Some(main)),
+        force: false,
+        res: Ok(removed("/gone/wt")),
+        warnings: vec![],
+    }));
+    assert_eq!(app.cwd, PathBuf::from(main));
+    assert_eq!(app.cd_on_exit, Some(PathBuf::from("/tmp")));
+    assert!(app.exiting());
+}
+
+#[test]
+fn sizes_awaiting_a_measurement_outlive_a_superseded_load() {
+    use super::jobs::Msg;
+    use crate::inventory::{LsReport, RepoStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    let (a_s, b_s) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let ls = |app: &mut App| {
+        let report = LsReport::from_repos(vec![RepoStatus {
+            repo: "shop".into(),
+            common_dir: PathBuf::from("/.git"),
+            default_branch: "main".into(),
+            worktrees: vec![status(a_s, "main", true), status(b_s, "feat/b", false)],
+        }]);
+        app.on_msg(Msg::Ls {
+            generation: app.generation,
+            res: Ok(report),
+        });
+    };
+    let mut app = app();
+    app.rows = Load::Ready(vec![
+        row(status(a_s, "main", true)),
+        row(status(b_s, "feat/b", false)),
+    ]);
+    // Hydrate finished: every size may have changed.
+    app.refresh(true);
+    ls(&mut app);
+    app.on_msg(Msg::Size {
+        generation: app.generation,
+        path: a.clone(),
+        bytes: 5,
+    });
+    // The last removal finishes before `b` is measured, superseding that load.
+    app.refresh(false);
+    ls(&mut app);
+    assert!(app.unmeasured.contains(&b), "b still needs measuring");
+    assert!(!app.unmeasured.contains(&a));
+    assert_eq!(app.size_of(&a), Some(5));
+}
+
+#[test]
+fn outcomes_after_quitting_are_kept_for_the_terminal() {
+    let mut app = app();
+    removing(&mut app, &["/tmp", "/usr", "/nowhere/wt"]);
+    key(&mut app, KeyCode::Char('q'));
+    app.on_msg(removal(
+        "/usr",
+        Err(crate::output::CmwError::error("disk on fire")),
+    ));
+    app.on_msg(removal(
+        "/nowhere/wt",
+        Err(crate::output::CmwError::refused(
+            "3 uncommitted changes in /nowhere/wt",
+            "cmw rm feat/cart --force",
+        )),
+    ));
+    assert!(app.modal.is_none(), "no dialog nobody can answer");
+    assert!(!app.exiting());
+    app.on_msg(removal("/tmp", Ok(removed("/tmp"))));
+    assert!(app.exiting());
+    let notes = app.exit_notes().join("\n");
+    assert!(notes.contains("disk on fire"), "{notes}");
+    assert!(
+        notes.contains("Kept feat/cart: 3 uncommitted changes"),
+        "{notes}"
+    );
+    assert!(notes.contains("cmw rm /nowhere/wt --force"), "{notes}");
+}
+
+#[test]
+fn a_restart_after_update_keeps_queued_removal_errors() {
+    use super::jobs::{Done, Msg};
+    let mut app = app();
+    app.busy = Some(super::app::Busy {
+        label: "Updating".into(),
+        started: std::time::Instant::now(),
+        lines: vec![],
+    });
+    removing(&mut app, &["/usr"]);
+    app.on_msg(removal(
+        "/usr",
+        Err(crate::output::CmwError::error("disk on fire")),
+    ));
+    app.on_msg(Msg::Done(Done::Update {
+        res: Ok(crate::update::UpdateReport {
+            current: "0.1.0".into(),
+            latest: Some("0.2.0".into()),
+            update_available: true,
+            method: "homebrew",
+            command: None,
+            updated: true,
+            installed: Some("0.2.0".into()),
+            installed_path: Some(PathBuf::from("/opt/homebrew/bin/cmw")),
+        }),
+        warnings: vec![],
+    }));
+    assert!(app.exiting());
+    assert!(app.exit_notes().join("\n").contains("disk on fire"));
+}
+
+#[test]
+fn ctrl_c_notes_removals_it_cut_short() {
+    let mut app = app();
+    removing(&mut app, &["/tmp"]);
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    app.on_key(ctrl_c);
+    app.on_key(ctrl_c);
+    assert!(app.exiting());
+    assert!(app.exit_notes()[0].starts_with("Quit while removing /tmp"));
 }

@@ -267,10 +267,12 @@ pub fn env_sync(tx: &Sender<Msg>, target: Target) {
     });
 }
 
+/// Runs alongside other removals and tasks, so it reports only through `Done::Remove`: no progress
+/// lines into another task's overlay. Removals in one repo take turns on its lock.
 pub fn remove(tx: &Sender<Msg>, target: Target, force: bool) {
     let tx = tx.clone();
     spawn(move || {
-        let ctx = streaming("rm", &tx);
+        let ctx = quiet("rm");
         let args = RmArgs {
             name: target.path.display().to_string(),
             force,
